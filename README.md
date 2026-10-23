@@ -29,7 +29,7 @@ In `claude-code-cli` mode, Claude Code cannot see the DSH session. The routing p
 When the form opens, it checks the current mode and shows the result:
 
 - If the current mode passes, the form says so and lists any warnings.
-- If it fails, the form lists each failed check with a fix hint and also checks the other mode. If the other mode passes, the form offers a button that selects it. The button only selects the mode; it does not save it.
+- If it fails, the form lists each failed check with a fix hint and also checks the other mode. If the other mode passes, its card says it can be switched to. Clicking a card only selects that mode; it does not save it.
 - The mode never changes automatically.
 
 Clicking **Check and save** runs a preflight check for the target mode first. If any blocking check fails, the save is refused, the current mode stays, and the form lists each failed check with a fix hint.

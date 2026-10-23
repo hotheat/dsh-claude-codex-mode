@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.2 - 2026-10-23
+
+### Changed
+
+- The plugin form has been redesigned. Two mode cards replace the dropdown. Each card shows who discusses and who edits (for example, DSH model → Codex), what the mode needs, and a check badge based on real check results.
+- The check results are listed in panels. The panels use DSH's design tokens, so they follow the light or dark theme. Failed checks are listed first, and passed checks are folded into one line.
+- **Check and save** is now a filled primary button. If the selected mode is already active, a note says so, instead of the button just looking disabled.
+
+### Fixed
+
+- Right after the plugin is enabled, the form no longer gets stuck on "Configuration is unavailable". It retries reading the settings with backoff, for about 4.5 seconds. If every attempt fails, it shows a **Retry** button.
+
 ## 0.3.1 - 2026-10-23
 
 ### Added
