@@ -1,6 +1,6 @@
 {
   "name": "dsh-claude-codex-mode",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "type": "module",
   "description": "Claude discussion through the DSH API or Claude Code CLI, with repository edits delegated to Codex.",
   "author": "jiaoguo",

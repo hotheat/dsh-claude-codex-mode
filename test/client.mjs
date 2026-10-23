@@ -194,7 +194,7 @@ test('current status loads without blocking selection or saving, then shows pass
     assert.ok(document.querySelector('.dcm-selection-check'))
     await select('api')
     const section = document.querySelector('.dcm-current-status')
-    assert.equal(document.querySelector('.dcm-badge').textContent, '有提示')
+    assert.equal(document.querySelector('.dcm-badge').textContent, '有提示 · 默认模型')
     assert.match(section.textContent, /默认模型/)
     assert.match(section.textContent, /选择 Claude/)
     assert.doesNotMatch(section.textContent, /API key/)
@@ -333,7 +333,7 @@ test('clean status summarizes the real check count; warnings have accessible lev
       ] }, alternative: null }))
       await render()
       const panel = document.querySelector('.dcm-current-status')
-      assert.equal(radio('api').querySelector('.dcm-badge').textContent, warning ? '有提示' : '通过')
+      assert.equal(radio('api').querySelector('.dcm-badge').textContent, warning ? '有提示 · 默认模型' : '通过')
       assert.equal(document.querySelector('.dcm-active .dcm-dot').classList.contains(warning ? 'dcm-warning' : 'dcm-success'), true)
       if (warning) {
         assert.equal(panel.querySelectorAll('.dcm-check-row').length, 1)
@@ -700,7 +700,7 @@ test('card click checks immediately, orders rows, caches until retry/save, and n
     await act(async () => document.querySelector('.dcm-check-retry').click())
     assert.equal(calls.filter(call => call[1]?.includes('/check?')).length, 2)
     await act(async () => finish({ ok: true, json: async () => ({ mode: 'claude-code-cli', ok: true, checks: [{ id: 'warn', ok: false, label: '提示行', level: 'warning' }] }) }))
-    assert.equal(radio('claude-code-cli').querySelector('.dcm-badge').textContent, '有提示')
+    assert.equal(radio('claude-code-cli').querySelector('.dcm-badge').textContent, '有提示 · 提示行')
     assert.equal(calls.some(call => call[0] === 'update' || call[1]?.includes('/preflight')), false)
     await submit()
     await select('api')
@@ -729,3 +729,42 @@ test('stale card response ignored across selection changes, repeated requests an
     assert.equal(document.body.textContent, '')
   })
 })
+
+for (const locale of ['zh', 'en']) {
+  for (const active of [true, false]) {
+    for (const count of [1, 2]) {
+      test(`${locale} ${active ? 'active' : 'checked non-active'} API badge describes ${count} warnings`, async () => {
+        await withForm(async ({ setLocale, setSavedMode, setStatusResponse, setCheckResponse, render, select, radio, calls }) => {
+          setLocale(locale)
+          const currentMode = active ? 'api' : 'claude-code-cli'
+          setSavedMode(currentMode)
+          const result = { mode: 'api', ok: true, checks: [
+            { id: 'default-model', label: 'Default model', ok: false, level: 'warning' },
+            ...(count === 2 ? [{ id: 'other-warning', label: 'Other warning', ok: false, level: 'warning' }] : []),
+            { id: 'passed-warning', label: 'Already passed', ok: true, level: 'warning' },
+            { id: 'key', label: 'API key', ok: true, level: 'error' },
+          ] }
+          setStatusResponse(async () => ({ mode: currentMode,
+            current: active ? result : { mode: currentMode, ok: true, checks: [
+              { id: 'current-warning', label: 'Current card warning', ok: false, level: 'warning' },
+            ] }, alternative: null,
+          }))
+          setCheckResponse(async () => ({ ok: true, json: async () => result }))
+          await render()
+          if (!active) {
+            await select('api')
+            assert.ok(calls.some(call => call[1] === '/claude-codex-mode/check?mode=api'))
+          }
+          const badge = radio('api').querySelector('.dcm-badge')
+          const expected = count === 1
+            ? locale === 'zh' ? '有提示 · 默认模型不是 Claude' : "Warning · Default model isn't Claude"
+            : locale === 'zh' ? '有 2 项提示' : '2 warnings'
+          assert.equal(badge.textContent, expected)
+          assert.equal(badge.title, expected)
+          assert.ok(badge.classList.contains('dcm-warning'))
+          assert.equal(calls.some(call => call[0] === 'update'), false)
+        })
+      })
+    }
+  }
+}

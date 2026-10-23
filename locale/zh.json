@@ -32,6 +32,8 @@
     "statusUnavailable": "暂时无法读取检查结果",
     "checking": "检查中",
     "hasWarnings": "有提示",
+    "warnDefaultModel": "默认模型不是 Claude",
+    "warningsCount": "有 {count} 项提示",
     "notPassed": "未通过",
     "unreadable": "无法读取",
     "switchable": "可切换",

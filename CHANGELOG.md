@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.4 - 2026-10-23
+
+### Changed
+
+- A mode card that passes with a warning now says what the warning is, for example "有提示 · 默认模型不是 Claude" (Warning · Default model isn't Claude). With more than one warning, it shows how many. Before this, the card only said "有提示" (Warning), and you had to scroll to the check panel to find out why.
+
 ## 0.3.3 - 2026-10-23
 
 ### Added
