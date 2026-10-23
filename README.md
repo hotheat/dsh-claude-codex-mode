@@ -2,9 +2,9 @@
 
 English | [简体中文](README.zh-CN.md)
 
-A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH) bundle that splits the work in two: Claude discusses, Codex edits.
+**Discuss / Execute Split** is a [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH) bundle that splits the work in two: discussion stays read-only, and every repository code edit goes to Codex.
 
-- **Discussion** covers requirements, plans, architecture, docs, reading code, and judging whether a fix is worth making. Claude does all of this, either as the DSH model itself or through the Claude Code CLI.
+- **Discussion** covers requirements, plans, architecture, docs, reading code, and judging whether a fix is worth making. The DSH model does this itself, or forwards it to the Claude Code CLI. The bundle is designed with Claude in mind, so in `api` mode pick a Claude model as the DSH default.
 - **Edits to code or config inside a Git repository** go to the [Codex CLI](https://github.com/openai/codex) through a bundled MCP server. They happen only after you say so ("开始吧 / 做吧 / 执行", that is, "go ahead"). DSH then reviews `git status`, `git diff`, and the test results itself before reporting back.
 
 A write guard enforces this split. If the model tries to write a repository code file with a structured edit tool, the guard blocks it and tells the model how to hand the edit to Codex.
@@ -85,7 +85,7 @@ The executables are found through the `PATH` of the DSH process. To point at a s
 dsh plugin --profile web add github:hotheat/dsh-claude-codex-mode
 ```
 
-Then enable **dsh-claude-codex-mode** on the Plugins page. No build step is needed.
+Then enable it on the Plugins page. It is listed as **Discuss / Execute Split**, or **讨论执行分工 (claude-codex-mode)** in Chinese. No build step is needed.
 
 ## Configure Claude for `api` mode
 

@@ -1,7 +1,7 @@
 {
   "meta": {
-    "title": "Claude discussion / Codex execution",
-    "description": "Choose DSH API discussion or read-only Claude Code CLI discussion, with repository code edits delegated to Codex."
+    "title": "Discuss / Execute Split",
+    "description": "Discussion stays read-only, and every repository code edit goes to Codex. The discussion runs on the DSH model or through the Claude Code CLI."
   },
   "form": {
     "title": "Discussion mode",

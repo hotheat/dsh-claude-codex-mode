@@ -2,9 +2,9 @@
 
 [English](README.md) | 简体中文
 
-[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）bundle：讨论交给 Claude，修改交给 Codex。
+**讨论执行分工**是一个 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）bundle：讨论阶段只读，修改仓库代码一律交给 Codex。
 
-- **讨论**：需求、计划、架构、文档、读代码、判断问题是否值得修，都由 Claude 完成。Claude 可以直接担任 DSH 主模型，也可以通过 Claude Code CLI 参与。
+- **讨论**：需求、计划、架构、文档、读代码、判断问题是否值得修，由 DSH 主模型完成，也可以由主模型转给 Claude Code CLI。本插件按 Claude 设计，`api` 模式下请把 DSH 默认模型设为 Claude。
 - **修改 Git 仓库里的代码或配置**：通过包内的 MCP server 交给 [Codex CLI](https://github.com/openai/codex)。只有你明确说「开始吧 / 做吧 / 执行」后才会执行。DSH 会自己检查 `git status`、`git diff` 和测试结果，再向你汇报。
 
 写文件 guard 负责落实这条分工：模型用结构化写文件工具改仓库代码时，guard 会拦下这次写入，并告诉模型怎样交给 Codex。
@@ -85,7 +85,7 @@
 dsh plugin --profile web add github:hotheat/dsh-claude-codex-mode
 ```
 
-然后在插件页启用 **dsh-claude-codex-mode**。无需构建。
+然后在插件页启用它，列表里显示为**讨论执行分工 (claude-codex-mode)**，英文界面显示为 **Discuss / Execute Split**。无需构建。
 
 ## 为 `api` 模式配置 Claude
 

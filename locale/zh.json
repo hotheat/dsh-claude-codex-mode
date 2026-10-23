@@ -1,7 +1,7 @@
 {
   "meta": {
-    "title": "Claude 讨论 / Codex 执行",
-    "description": "切换 DSH API 直接讨论或 Claude Code CLI 只读讨论，仓库代码修改统一交给 Codex。"
+    "title": "讨论执行分工 (claude-codex-mode)",
+    "description": "讨论阶段只读，修改仓库代码一律交给 Codex。讨论可以由 DSH 主模型完成，也可以交给 Claude Code CLI。"
   },
   "form": {
     "title": "讨论模式",

@@ -1,8 +1,8 @@
 {
   "name": "dsh-claude-codex-mode",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "type": "module",
-  "description": "Claude discussion through the DSH API or Claude Code CLI, with repository edits delegated to Codex.",
+  "description": "Discussion stays read-only, and every repository code edit goes to Codex. The discussion runs on the DSH model or through the Claude Code CLI.",
   "author": "jiaoguo",
   "license": "MIT",
   "repository": { "type": "git", "url": "https://github.com/hotheat/dsh-claude-codex-mode" },

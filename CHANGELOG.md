@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.5 - 2026-10-23
+
+### Changed
+
+- The plugin's display name is now **讨论执行分工 (claude-codex-mode)** in Chinese and **Discuss / Execute Split** in English. The old name, "Claude 讨论 / Codex 执行", promised Claude, but in `api` mode the discussion runs on whatever the DSH default model is. The new description says what the plugin enforces: discussion stays read-only, and every repository code edit goes to Codex. The package name `dsh-claude-codex-mode` is unchanged, so installs and paths keep working.
+
 ## 0.3.4 - 2026-10-23
 
 ### Changed
