@@ -1,0 +1,26 @@
+{
+  "meta": {
+    "title": "Claude discussion / Codex execution",
+    "description": "Choose DSH API discussion or read-only Claude Code CLI discussion, with repository code edits delegated to Codex."
+  },
+  "form": {
+    "title": "Discussion mode",
+    "mode": "Discuss using",
+    "current": "Current mode",
+    "api": "API: discuss with the DSH model",
+    "cli": "Claude Code CLI: read-only discussion",
+    "apiHint": "Configure an Anthropic provider and API key on Models, then select Claude. Codex handles code edits.",
+    "cliHint": "Discuss through your Claude Code subscription. After you approve execution, DSH calls Codex to edit code.",
+    "save": "Check and save",
+    "saving": "Checking and saving…",
+    "saved": "Saved. The mode is active.",
+    "loading": "Reading configuration…",
+    "unavailable": "Configuration is unavailable. Enable this plugin and the Settings service.",
+    "failed": "Save failed. Check the configuration and try again.",
+    "blocked": "Preflight failed. The current mode is unchanged.",
+    "error": "Blocking",
+    "warning": "Warning",
+    "pass": "Pass",
+    "hint": "Fix"
+  }
+}

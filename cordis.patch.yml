@@ -1,0 +1,6 @@
+# The host owns its MCP child fibers, so disabling this row removes both servers.
+- insert:
+    - id: claude-codex-mode
+      name: dsh-claude-codex-mode
+      config:
+        mode: api

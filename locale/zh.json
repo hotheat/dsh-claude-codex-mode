@@ -1,0 +1,26 @@
+{
+  "meta": {
+    "title": "Claude 讨论 / Codex 执行",
+    "description": "切换 DSH API 直接讨论或 Claude Code CLI 只读讨论，仓库代码修改统一交给 Codex。"
+  },
+  "form": {
+    "title": "讨论模式",
+    "mode": "讨论方式",
+    "current": "当前模式",
+    "api": "API：DSH 主模型直接讨论",
+    "cli": "Claude Code CLI：只读讨论",
+    "apiHint": "在 Models 页面配置 Anthropic provider 和 API key，并选择 Claude。代码修改交给 Codex。",
+    "cliHint": "使用 Claude Code 的订阅登录讨论。用户确认执行后，由 DSH 调用 Codex 修改代码。",
+    "save": "检查并保存",
+    "saving": "检查并保存中…",
+    "saved": "已保存，模式已生效。",
+    "loading": "正在读取配置…",
+    "unavailable": "配置暂不可用，请确认插件和 Settings 服务已启用。",
+    "failed": "保存失败，请重新检查配置后重试。",
+    "blocked": "前置检查未通过，当前模式保持不变。",
+    "error": "阻断",
+    "warning": "提示",
+    "pass": "通过",
+    "hint": "修复提示"
+  }
+}
