@@ -90,7 +90,10 @@ try {
           return () => toolMap.delete(definition.name)
         },
       })
-      ctx.provide('credentials', { describe: async () => { credentialReads++; return { configured: credentialsPresent } } })
+      ctx.provide('credentials', {
+        describe: async () => { credentialReads++; return { configured: credentialsPresent, source: 'file' } },
+        resolve: async ref => { assert.equal(ref, 'TEST_KEY'); return credentialsPresent ? { value: 'stored-test-secret', source: 'file' } : undefined },
+      })
       ctx.provide('agentDefaultModel', { currentSelection: () => selection })
       ctx.provide('webServer', { register(definition) { route = definition; return () => { route = undefined } } })
     },
@@ -148,6 +151,39 @@ try {
   assert.equal(current.body.current.mode, 'api')
   assert.equal(current.body.current.ok, true)
   assert.equal(current.body.alternative, null)
+  assert.equal(current.body.api.provider, true)
+  assert.equal(current.body.api.credential.source, 'file')
+  assert.deepEqual(current.body.api.models, ['claude-test'])
+  assert.equal((await request('', 'POST', '/claude-codex-mode/test-connection', { origin: 'http://other-host' })).status, 403)
+  assert.equal((await request('', 'GET', '/claude-codex-mode/check?mode=invalid')).status, 400)
+  assert.equal((await request('', 'GET', '/claude-codex-mode/check?mode=api', { origin: 'http://other-host' })).status, 403)
+  const realFetch = globalThis.fetch
+  try {
+    globalThis.fetch = async (url, init) => {
+      assert.equal(url, 'https://api.anthropic.com/v1/models?limit=1000')
+      assert.equal(init.headers['x-api-key'], 'stored-test-secret')
+      assert.equal(init.redirect, 'manual')
+      return new Response(JSON.stringify({ data: [{ id: 'claude-test' }] }))
+    }
+    const connection = await request('', 'POST', '/claude-codex-mode/test-connection')
+    assert.equal(connection.body.outcome, 'ok')
+    assert.deepEqual(connection.body.missing, [])
+    assert.doesNotMatch(JSON.stringify(connection.body), /stored-test-secret/)
+    await assert.rejects(root.settings.update(first.ns, { mode: 'claude-code-cli' }, first.revision), /前置检查/)
+    credentialsPresent = false
+    globalThis.fetch = () => assert.fail('missing key must not make a network request')
+    assert.equal((await request('', 'POST', '/claude-codex-mode/test-connection')).body.outcome, 'no-key')
+  } finally {
+    credentialsPresent = true
+    globalThis.fetch = realFetch
+  }
+  const preview = await request('', 'GET', '/claude-codex-mode/check?mode=claude-code-cli')
+  assert.equal(preview.status, 200)
+  assert.equal(preview.body.ok, true)
+  assert.equal(preview.body.mode, 'claude-code-cli')
+  assert.equal(preview.body.api.provider, true)
+  await assert.rejects(root.settings.update(first.ns, { mode: 'claude-code-cli' }, first.revision), /前置检查/)
+
   assert.equal((await status({ origin: 'http://other-host' })).status, 403)
   credentialsPresent = false
   const alternative = await status()
@@ -187,7 +223,7 @@ try {
   assert.equal(cliCurrent.body.mode, 'claude-code-cli')
   assert.equal(cliCurrent.body.current.ok, true)
   assert.equal(cliCurrent.body.alternative, null)
-  assert.equal(credentialReads, readsBeforeStatus, 'passing CLI status must not run API checks')
+  assert.equal(credentialReads, readsBeforeStatus + 1, 'passing CLI status reads the API summary only')
   console.log('status: current-only pass, alternatives on failure, cross-origin refused, approval unchanged')
   process.env.CC_TEST_AUTH = 'false'
   credentialsPresent = true

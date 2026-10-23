@@ -30,6 +30,8 @@ async function withForm(run) {
   const timerDelays = []
   let preflightResponse
   let stateResponse
+  let checkResponse
+  let connectionResponse
   let locale = 'zh'
   let statusResponse = async () => ({ mode: savedMode, current: { mode: savedMode, ok: true, checks: [] }, alternative: null })
   let statusFetch = async () => ({ ok: true, json: statusResponse })
@@ -45,6 +47,10 @@ async function withForm(run) {
     fetch: async (url, options) => {
       calls.push(['fetch', url, options?.method])
       if (url.endsWith('/status')) return statusFetch()
+      if (url.includes('/check?')) return checkResponse ? checkResponse(url) : { ok: true, json: async () => ({
+        mode: url.split('mode=')[1], ok: true, checks: [],
+      }) }
+      if (url.endsWith('/test-connection')) return connectionResponse()
       const state = url.endsWith('/state')
       if (state && stateResponse) return stateResponse()
       if (!state && preflightResponse) return preflightResponse()
@@ -107,6 +113,8 @@ async function withForm(run) {
       setWritable(value) { writable = value },
       setDescribeOk(value) { describeOk = value },
       setPreflightResponse(value) { preflightResponse = value },
+      setCheckResponse(value) { checkResponse = value },
+      setConnectionResponse(value) { connectionResponse = value },
       setStateResponse(value) { stateResponse = value },
       setLocale(value) { locale = value },
       setPass(value) { pass = value },
@@ -183,13 +191,15 @@ test('current status loads without blocking selection or saving, then shows pass
       { id: 'model', label: '默认模型', ok: false, level: 'warning', hint: '选择 Claude' },
       { id: 'key', label: 'API key', ok: true, level: 'error', hint: '配置密钥' },
     ] }, alternative: null }))
-    const section = document.querySelector('section')
+    assert.ok(document.querySelector('.dcm-selection-check'))
+    await select('api')
+    const section = document.querySelector('.dcm-current-status')
     assert.equal(document.querySelector('.dcm-badge').textContent, '有提示')
     assert.match(section.textContent, /默认模型/)
     assert.match(section.textContent, /选择 Claude/)
     assert.doesNotMatch(section.textContent, /API key/)
     assert.equal(section.querySelector('button'), null)
-    assert.equal(document.querySelectorAll('[role="radio"]')[1].getAttribute('aria-checked'), 'true', 'status must not replace the staged selection')
+    assert.equal(document.querySelectorAll('[role="radio"]')[0].getAttribute('aria-checked'), 'true')
     assert.equal(calls.some(call => call[0] === 'update'), false)
   })
 })
@@ -208,7 +218,7 @@ for (const [currentMode, otherMode, name] of [['api', 'claude-code-cli', 'Claude
           ] },
         }))
         await render()
-        const section = document.querySelector('section')
+        const section = document.querySelector('.dcm-current-status')
         assert.match(section.textContent, /当前登录检查/)
         assert.match(section.textContent, /修复当前登录/)
         assert.equal(radio(currentMode).querySelector('.dcm-badge').textContent, '未通过')
@@ -267,12 +277,12 @@ test('saving while initial status loads refreshes status and ignores the older r
     setStatusResponse(async () => ({ mode: 'claude-code-cli', current: { mode: 'claude-code-cli', ok: true, checks: [] }, alternative: null }))
     await submit()
     assert.match(document.body.textContent, /已保存/)
-    assert.match(document.querySelector('section').textContent, /全部 0 项检查通过/)
+    assert.match(document.querySelector('.dcm-current-status').textContent, /全部 0 项检查通过/)
     await act(async () => finish({ mode: 'api', current: { mode: 'api', ok: false, checks: [
       { id: 'key', label: '过期检查结果', ok: false, level: 'error', hint: '过期提示' },
     ] }, alternative: null }))
     assert.doesNotMatch(document.body.textContent, /过期检查结果/)
-    assert.match(document.querySelector('section').textContent, /全部 0 项检查通过/)
+    assert.match(document.querySelector('.dcm-current-status').textContent, /全部 0 项检查通过/)
   })
 })
 
@@ -309,7 +319,8 @@ test('radio cards support roving focus, arrows, Space and Enter without saving',
     await select('claude-code-cli')
     assert.equal(document.querySelector('button[type="submit"]').disabled, false)
     assert.equal(radio('api').querySelector('.dcm-current-tag').textContent, '当前')
-    assert.equal(calls.length, 2, 'selection never requests preflight, updates settings or refreshes status')
+    assert.equal(calls.filter(call => call[1]?.includes('/check?')).length, 1, 'card check is cached across selection')
+    assert.equal(calls.some(call => call[0] === 'update' || call[1]?.includes('/preflight')), false)
   })
 })
 
@@ -448,7 +459,8 @@ test('preflight orders blockers before warnings and collapses passed checks into
 })
 
 test('preflight badge persists across selection, resets for a new check and clears on status refetch', async () => {
-  await withForm(async ({ render, select, submit, radio, setPass, setRejectRevision, setPreflightResponse }) => {
+  await withForm(async ({ render, select, submit, radio, setPass, setRejectRevision, setPreflightResponse, setCheckResponse }) => {
+    setCheckResponse(async () => ({ ok: true, json: async () => ({ mode: 'claude-code-cli', ok: false, checks: [] }) }))
     await render()
     await select('claude-code-cli')
     await submit()
@@ -572,5 +584,148 @@ test('unmount cancels pending describe retries and ignores an in-flight describe
     ] } }))
     assert.equal(timers.size, 0)
     assert.equal(calls.some(call => call[0] === 'fetch'), false)
+  })
+})
+
+const apiSummary = {
+  provider: true, baseURL: 'https://gateway.example/anthropic', defaultBaseURL: false, apiKeyEnv: 'ANTHROPIC_AUTH_TOKEN',
+  credential: { configured: true, source: 'file' }, models: ['claude-sonnet', 'claude-opus'],
+  defaultModel: { provider: 'anthropic', model: 'claude-sonnet' },
+}
+const apiStatus = api => ({ mode: 'api', current: { mode: 'api', ok: true, checks: [] }, alternative: null, api })
+
+test('API summary renders URL, credential status, model chips and text-only settings hint in both locales', async () => {
+  for (const locale of ['zh', 'en']) {
+    for (const source of ['file', 'env', null]) {
+      await withForm(async ({ setLocale, setStatusResponse, render, select }) => {
+        setLocale(locale)
+        setStatusResponse(async () => apiStatus({ ...apiSummary, credential: { configured: source !== null, source } }))
+        await render()
+        const panel = document.querySelector('.dcm-api-config')
+        assert.match(panel.textContent, /https:\/\/gateway.example\/anthropic/)
+        assert.match(panel.textContent, /ANTHROPIC_AUTH_TOKEN/)
+        assert.deepEqual(Array.from(panel.querySelectorAll('.dcm-model-chip'), node => node.textContent), apiSummary.models)
+        const status = locale === 'zh' ? { file: '已保存在 DSH', env: '来自环境变量', null: '未配置' }
+          : { file: 'Saved in DSH', env: 'From environment', null: 'Not configured' }
+        assert.ok(panel.textContent.includes(status[source]))
+        assert.match(panel.textContent, locale === 'zh' ? /默认模型: anthropic \/ claude-sonnet · Claude/ : /Default model: anthropic \/ claude-sonnet · Claude/)
+        assert.match(panel.textContent, locale === 'zh' ? /打开 设置 → 模型/ : /open Settings → Models/)
+        assert.equal(panel.querySelector('a'), null)
+        assert.equal(panel.querySelectorAll('button').length, 1)
+        assert.equal(panel.querySelector('button').disabled, false)
+        await select('claude-code-cli')
+        assert.equal(document.querySelector('.dcm-api-config'), null)
+      })
+    }
+  }
+})
+
+test('default URL and missing provider empty state', async () => {
+  for (const provider of [true, false]) {
+    await withForm(async ({ setStatusResponse, render, calls }) => {
+      setStatusResponse(async () => apiStatus({ ...apiSummary, provider, baseURL: null, defaultBaseURL: true }))
+      await render()
+      const panel = document.querySelector('.dcm-api-config')
+      assert.match(panel.textContent, provider ? /默认 · api.anthropic.com/ : /尚未配置 Anthropic provider/)
+      assert.equal(panel.querySelector('.dcm-test-connection').disabled, !provider)
+      if (!provider) assert.equal(panel.querySelector('dl'), null)
+      assert.equal(calls.some(call => call[1]?.includes('test-connection')), false, 'summary never probes the network')
+    })
+  }
+})
+
+for (const locale of ['zh', 'en']) {
+  for (const [outcome, extra, zh, en, tone] of [
+    ['ok', { models: ['claude-sonnet'], missing: ['claude-opus'] }, /连接正常 · 列出 1 个模型/, /Connection OK · Listed 1 models/, 'success'],
+    ['unauthorized', { status: 401 }, /密钥被拒绝（HTTP 401）/, /Key rejected \(HTTP 401\)/, 'error'],
+    ['not-supported', {}, /无法用这种方式验证；不代表密钥无效/, /check is inconclusive; it does not mean the key is invalid/, 'warning'],
+    ['timeout', {}, /连接超时.*网络或代理/, /timed out.*network or proxy/, 'error'],
+    ['unreachable', {}, /无法连接.*网络或代理/, /Cannot connect.*network or proxy/, 'error'],
+    ['redirect', {}, /重定向.*检查 Base URL/, /redirected.*Check the base URL/, 'error'],
+    ['http-error', { status: 500 }, /HTTP 500.*网络或代理/, /HTTP 500.*network or proxy/, 'error'],
+    ['no-key', {}, /未配置密钥/, /No key configured/, 'error'],
+    ['no-provider', {}, /尚未配置 Anthropic provider/, /No Anthropic provider configured/, 'error'],
+  ]) {
+    test(`${locale} explicit connection test: spinner then ${outcome}`, async () => {
+      await withForm(async ({ setLocale, setStatusResponse, setConnectionResponse, render, select, calls }) => {
+        setLocale(locale)
+        setStatusResponse(async () => apiStatus(apiSummary))
+        let finish
+        setConnectionResponse(() => new Promise(resolve => { finish = resolve }))
+        await render()
+        const button = document.querySelector('.dcm-test-connection')
+        await act(async () => button.click())
+        assert.equal(button.disabled, true)
+        assert.equal(button.getAttribute('aria-busy'), 'true')
+        assert.ok(button.querySelector('.dcm-spinner'))
+        assert.deepEqual(calls.at(-1), ['fetch', '/claude-codex-mode/test-connection', 'POST'])
+        await act(async () => finish({ ok: true, json: async () => ({ ok: outcome === 'ok', outcome, ...extra, elapsedMs: 5 }) }))
+        assert.equal(button.disabled, false)
+        assert.equal(button.querySelector('.dcm-spinner'), null)
+        const result = document.querySelector('.dcm-connection-result')
+        assert.ok(result.classList.contains(`dcm-${tone}`))
+        assert.ok(result.querySelector('.dcm-dot'))
+        assert.match(result.textContent, locale === 'zh' ? zh : en)
+        if (outcome === 'ok') assert.match(result.querySelector('.dcm-warning').textContent, locale === 'zh' ? /配置的模型不在列表里：claude-opus/ : /Configured models absent from the list: claude-opus/)
+        await select('claude-code-cli')
+        await select('api')
+        assert.equal(document.querySelector('.dcm-connection-result'), null)
+      })
+    })
+  }
+}
+
+test('card click checks immediately, orders rows, caches until retry/save, and never saves', async () => {
+  await withForm(async ({ render, select, radio, setCheckResponse, calls, submit }) => {
+    let finish
+    setCheckResponse(() => new Promise(resolve => { finish = resolve }))
+    await render()
+    await select('claude-code-cli')
+    assert.equal(radio('claude-code-cli').querySelector('.dcm-badge').textContent, '检查中')
+    assert.equal(calls.at(-1)[1], '/claude-codex-mode/check?mode=claude-code-cli')
+    await act(async () => finish({ ok: true, json: async () => ({ mode: 'claude-code-cli', ok: false, api: apiSummary, checks: [
+      { id: 'warn', label: '提示行', ok: false, level: 'warning', hint: '警告提示' },
+      { id: 'pass', label: '隐藏通过行', ok: true },
+      { id: 'block', label: '阻断行', ok: false, level: 'error', hint: '失败提示' },
+    ] }) }))
+    assert.equal(radio('claude-code-cli').querySelector('.dcm-badge').textContent, '未通过')
+    const panel = document.querySelector('.dcm-selection-check')
+    assert.equal(panel.querySelector('h4').textContent, 'Claude Code CLI 检查')
+    assert.deepEqual(Array.from(panel.querySelectorAll('.dcm-check-label'), node => node.textContent), ['阻断行', '提示行', '另有 1 项检查通过'])
+    assert.equal(document.querySelector('.dcm-current-status'), null)
+    await select('api')
+    assert.ok(document.querySelector('.dcm-current-status'))
+    await select('claude-code-cli')
+    assert.equal(calls.filter(call => call[1]?.includes('/check?')).length, 1)
+    await act(async () => document.querySelector('.dcm-check-retry').click())
+    assert.equal(calls.filter(call => call[1]?.includes('/check?')).length, 2)
+    await act(async () => finish({ ok: true, json: async () => ({ mode: 'claude-code-cli', ok: true, checks: [{ id: 'warn', ok: false, label: '提示行', level: 'warning' }] }) }))
+    assert.equal(radio('claude-code-cli').querySelector('.dcm-badge').textContent, '有提示')
+    assert.equal(calls.some(call => call[0] === 'update' || call[1]?.includes('/preflight')), false)
+    await submit()
+    await select('api')
+    await select('claude-code-cli')
+    assert.equal(calls.filter(call => call[1]?.includes('/check?')).length, 3, 'save invalidates the card cache')
+  })
+})
+
+test('stale card response ignored across selection changes, repeated requests and unmount', async () => {
+  await withForm(async ({ render, select, radio, setCheckResponse, root }) => {
+    const finishes = []
+    setCheckResponse(() => new Promise(resolve => finishes.push(resolve)))
+    await render()
+    await select('claude-code-cli')
+    await select('api')
+    await act(async () => finishes[0]({ ok: true, json: async () => ({ mode: 'claude-code-cli', ok: false, checks: [{ id: 'old', label: '过期检查', ok: false }] }) }))
+    assert.doesNotMatch(document.body.textContent, /过期检查/)
+    await select('claude-code-cli')
+    assert.equal(finishes.length, 2, 'stale result was not cached')
+    assert.equal(radio('claude-code-cli').querySelector('.dcm-badge').textContent, '检查中')
+    await act(async () => finishes[1]({ ok: true, json: async () => ({ mode: 'claude-code-cli', ok: true, checks: [] }) }))
+    assert.equal(radio('claude-code-cli').querySelector('.dcm-badge').textContent, '通过')
+    await act(async () => document.querySelector('.dcm-check-retry').click())
+    await act(async () => root.render(null))
+    await act(async () => finishes[2]({ ok: true, json: async () => ({ mode: 'claude-code-cli', ok: false, checks: [] }) }))
+    assert.equal(document.body.textContent, '')
   })
 })

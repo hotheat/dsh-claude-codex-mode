@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.3 - 2026-10-23
+
+### Added
+
+- When the API card is selected, the form shows the current Anthropic provider settings: the base URL, the name of the key variable, and where the key comes from (saved in DSH, the environment, or missing). It also shows the configured models and the default model. Nothing here is editable. A hint points to **Settings → Models**, where these are changed. A plugin form cannot open that page itself.
+- A **Test connection** button in that panel. It asks the provider for its model list (`GET /v1/models`) with the current key. It does not use tokens. The result tells apart a rejected key, an unreachable address, a timeout, and an endpoint that cannot list models. That last case is only a warning: some relays don't offer a model list, which doesn't mean the key is bad. The test runs only when you click the button. Redirects are refused, so the key is never sent to a second address.
+- Clicking the card of a mode that isn't active now checks that mode at once and shows the result. Before this, you saw the result only after clicking **Check and save**. This check is read-only and does not allow a save. Saving still runs its own check.
+- New read-only routes `GET /claude-codex-mode/check?mode=` and `POST /claude-codex-mode/test-connection`. `GET /claude-codex-mode/status` now also returns the API settings summary. None of these routes allow a mode change, and all of them refuse cross-origin requests.
+
 ## 0.3.2 - 2026-10-23
 
 ### Changed

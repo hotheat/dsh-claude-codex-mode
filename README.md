@@ -29,8 +29,24 @@ In `claude-code-cli` mode, Claude Code cannot see the DSH session. The routing p
 When the form opens, it checks the current mode and shows the result:
 
 - If the current mode passes, the form says so and lists any warnings.
-- If it fails, the form lists each failed check with a fix hint and also checks the other mode. If the other mode passes, its card says it can be switched to. Clicking a card only selects that mode; it does not save it.
+- If it fails, the form lists each failed check with a fix hint and also checks the other mode. If the other mode passes, its card says it can be switched to.
+- Clicking the card of the other mode checks that mode right away and shows the result. The click only selects the mode; it does not save it.
 - The mode never changes automatically.
+
+When the API card is selected, the form also shows the Anthropic provider settings DSH is using:
+
+- the base URL;
+- the name of the key variable, and where the key comes from (saved in DSH, the environment, or missing);
+- the configured models and the default model.
+
+These are read-only here. To change them, open **Settings → Models**. A plugin form cannot open that page for you.
+
+**Test connection** asks the provider for its model list (`GET /v1/models`) with the current key, so it uses no tokens.
+
+- The result tells apart a rejected key, an unreachable address, a timeout, and configured models missing from the list.
+- Some relays don't offer a model list. Then the test can't tell whether the key works, and it shows a warning instead of a failure.
+- The test runs only when you click the button.
+- Redirects are refused, so the key is never sent to a second address.
 
 Clicking **Check and save** runs a preflight check for the target mode first. If any blocking check fails, the save is refused, the current mode stays, and the form lists each failed check with a fix hint.
 
