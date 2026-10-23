@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.1 - 2026-10-23
+
+### Added
+
+- The plugin form now checks the current mode as soon as it opens. It shows whether the mode passes, with a hint for each failed check and each warning. Before this, problems with the initial `api` mode showed up only as warnings in the DSH log.
+- If the current mode fails and the other mode passes, the form says so and offers a button that selects the other mode. The button only changes the selection. Nothing is saved until you click **Check and save**.
+- If both modes fail, the form lists what is wrong with each.
+- New read-only route `GET /claude-codex-mode/status`. It never approves a mode change and refuses cross-origin requests.
+
 ## 0.3.0 - 2026-10-23
 
 First public release as a standalone DSH bundle.

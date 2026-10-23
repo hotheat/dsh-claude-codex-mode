@@ -46,6 +46,7 @@ let guard
 let route
 let directoryService
 let credentialsPresent = true
+let credentialReads = 0
 let selection = { provider: 'anthropic', model: 'claude-test' }
 const profile = { name: 'test', dir, patchPath: join(dir, 'cordis.patch.yml'), installAnchor: join(temporary, 'package.json'), home: temporary, cwd: temporary, startedBundles: ['test-bundle'], overlays: [] }
 const bundle = join(dir, 'node_modules', 'test-bundle')
@@ -61,15 +62,16 @@ writeFileSync(join(bundle, 'cordis.patch.yml'), JSON.stringify([{ insert: [
   { id: 'llm-pi-ai', name: 'cordis:provider', config: { providers: { anthropic: { apiKeyEnv: 'TEST_KEY', models: [{ id: 'claude-test' }] } } } },
   { id: 'claude-codex-mode', name: 'cordis:mode', config: { mode: 'api' } },
 ] }]))
-const request = async (mode, method = 'POST', path = `/claude-codex-mode/preflight?mode=${mode}`) => {
+const request = async (mode, method = 'POST', path = `/claude-codex-mode/preflight?mode=${mode}`, headers = {}) => {
   let status
   let body
-  await route.handler({ url: path, method, headers: { host: 'localhost' } }, {
+  await route.handler({ url: path, method, headers: { host: 'localhost', ...headers } }, {
     writeHead(code) { status = code }, end(text) { body = JSON.parse(text) },
   })
   return { status, body }
 }
 const state = () => request('', 'GET', '/claude-codex-mode/state')
+const status = headers => request('', 'GET', '/claude-codex-mode/status', headers)
 try {
   await root.plugin({
     name: 'fixture-services',
@@ -88,7 +90,7 @@ try {
           return () => toolMap.delete(definition.name)
         },
       })
-      ctx.provide('credentials', { describe: async () => ({ configured: credentialsPresent }) })
+      ctx.provide('credentials', { describe: async () => { credentialReads++; return { configured: credentialsPresent } } })
       ctx.provide('agentDefaultModel', { currentSelection: () => selection })
       ctx.provide('webServer', { register(definition) { route = definition; return () => { route = undefined } } })
     },
@@ -140,9 +142,25 @@ try {
   assert.equal(first.value.mode, 'api')
   assert.equal(first.autoGenerate, false)
   const before = readFileSync(profile.patchPath, 'utf8')
+  const current = await status({ origin: 'http://localhost' })
+  assert.equal(current.status, 200)
+  assert.equal(current.body.mode, 'api')
+  assert.equal(current.body.current.mode, 'api')
+  assert.equal(current.body.current.ok, true)
+  assert.equal(current.body.alternative, null)
+  assert.equal((await status({ origin: 'http://other-host' })).status, 403)
+  credentialsPresent = false
+  const alternative = await status()
+  assert.equal(alternative.body.current.ok, false)
+  assert.equal(alternative.body.alternative.mode, 'claude-code-cli')
+  assert.equal(alternative.body.alternative.ok, true)
   await assert.rejects(root.settings.update(first.ns, { mode: 'claude-code-cli' }, first.revision), /前置检查/)
   assert.equal(readFileSync(profile.patchPath, 'utf8'), before, 'unguarded settings writes must not persist')
   process.env.CC_TEST_AUTH = 'false'
+  const bothFailed = await status()
+  assert.equal(bothFailed.body.current.ok, false)
+  assert.equal(bothFailed.body.alternative.ok, false)
+  credentialsPresent = true
   const failed = await request('claude-code-cli')
   assert.equal(failed.body.ok, false)
   assert.equal(failed.body.checks.find(check => check.id === 'claude-auth').ok, false)
@@ -151,7 +169,9 @@ try {
   assert.equal(readFileSync(profile.patchPath, 'utf8'), before)
   process.env.CC_TEST_AUTH = 'true'
   assert.equal((await request('claude-code-cli')).body.ok, true)
+  await status()
   await root.settings.update(first.ns, { mode: 'claude-code-cli' }, first.revision)
+  assert.equal((await status()).body.mode, 'claude-code-cli', 'status waits for the mode transition')
   assert.equal((await state()).body.mode, 'claude-code-cli')
   assert.equal(entry.fiber, fiber, 'volatile mode switch must keep the same host fiber')
   assert.ok(toolMap.has('mcp__claude-code__claude_code_run'), 'real Claude MCP tool discovery')
@@ -161,6 +181,23 @@ try {
   console.log('api -> claude-code-cli: same host fiber, Codex + Claude tools mounted, review prompt active')
   const second = describe()
   await assert.rejects(root.settings.update(second.ns, { mode: 'api' }, first.revision), /changed since/)
+  credentialsPresent = false
+  const readsBeforeStatus = credentialReads
+  const cliCurrent = await status()
+  assert.equal(cliCurrent.body.mode, 'claude-code-cli')
+  assert.equal(cliCurrent.body.current.ok, true)
+  assert.equal(cliCurrent.body.alternative, null)
+  assert.equal(credentialReads, readsBeforeStatus, 'passing CLI status must not run API checks')
+  console.log('status: current-only pass, alternatives on failure, cross-origin refused, approval unchanged')
+  process.env.CC_TEST_AUTH = 'false'
+  credentialsPresent = true
+  const apiAlternative = await status()
+  assert.equal(apiAlternative.body.current.mode, 'claude-code-cli')
+  assert.equal(apiAlternative.body.current.ok, false)
+  assert.equal(apiAlternative.body.alternative.mode, 'api')
+  assert.equal(apiAlternative.body.alternative.ok, true)
+  await assert.rejects(root.settings.update(second.ns, { mode: 'api' }, second.revision), /前置检查/)
+  process.env.CC_TEST_AUTH = 'true'
   credentialsPresent = false
   assert.equal((await request('api')).body.ok, false)
   await assert.rejects(root.settings.update(second.ns, { mode: 'api' }, second.revision), /前置检查/)
