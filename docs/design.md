@@ -1,6 +1,8 @@
 # dsh-claude-codex-mode 设计
 
-状态：已实现（2026-10-23，0.3.0）。
+当前决策见文末「0.4.0：宿主工具与 DSH 后台任务」。
+
+## 0.3.0 原始设计（2026-10-23）
 
 实现与设计的差异：
 
@@ -104,3 +106,29 @@ dsh-claude-codex-mode/
 - 用隔离的 DSH home 安装本地目录并 `--dump-config`，能看到本 bundle 的层。不碰用户真实的 `~/.dsh`。
 - `npm run doctor` 在本机两种模式下都输出可读结果。
 - `grep -rn '/Users/\|/opt/homebrew' .` 只在文档示例里命中（如果有）。
+
+## 0.4.0：宿主工具与 DSH 后台任务
+
+Codex MCP 子进程无法访问宿主的 `ctx.jobs` 或 `ctx.tools`，DSH MCP 客户端也不消费 `notifications/progress`。
+宿主在 `lib/codex-tools.js` 直接注册三个原始 ToolDefinition，执行链路为 `codex_cli_run/review` → `runCodex` → Codex 进程组 → JSONL `onEvent` → `lib/codex-events.js` → `job.append` / `job.updateProgress` → 会话头部任务面板。
+`codex_cli_setup` 使用异步 `execFile` 探测，不创建任务。
+Schema 的唯一来源为 `mcp/codex-cli/lib/tools.mjs`，MCP server 在协议边界将 `parameters` 映射为 `inputSchema`。
+Schema 数值及数组长度限制写入描述，符合宿主支持的 JSON Schema 子集。
+
+`api` 模式只注册 Codex 宿主工具，不挂载 MCP；`claude-code-cli` 模式额外挂载原有 Claude Code MCP。
+Codex 独立 MCP server、worker 和原有任务工具仍随包分发，供独立 MCP 使用。
+宿主只注册 setup/run/review，任务控制使用 DSH `job_output`、`job_list`、`job_kill`。
+
+前台调用从开始即登记为 `kind: codex` 的任务，携带调用 ID、根调用 ID 和可用时的 agent owner。
+等待预算为 `timeoutMs` 或默认 4 分钟，与进程运行时限分开；等待预算到期返回任务 ID，进程继续运行，runner 默认运行时限仍为 30 分钟。
+等待期间结束则返回原始完整结果并移除该任务行。
+`background: true` 或显式 `timeoutMs > 240000` 立即返回任务 ID，显式时限透传给 runner；没有显式时限时使用 runner 默认值。
+已返回 ID 的任务在结束后保留任务行、输出和最终消息。
+
+停止请求同步记录第一个原因，通过共用 `terminateProcessGroup` 终止整个进程组，进程退出后任务才结束。
+调用方中止前台等待时，以 `tool call aborted` 停止任务，等待进程和任务结束，移除任务，再抛出原中止异常。
+任务输出通过每次运行独立的 renderer 增量渲染，避免重复打印累计消息和 reasoning。
+
+没有 `ctx.get('jobs')` 时，前台直接调用 runner 并使用前台超时，后台报错提示挂载 `@deepseek-ai/dsh-jobs-local` 与 `@deepseek-ai/dsh-tool-jobs`。
+注册表存在但因无控制器或达到任务上限拒绝注册时，记录警告，前台降级为直接执行，后台重抛注册错误。
+工具由 fiber effect 注册与释放，先于 preflight 等待，因此前置检查警告不影响工具注册。

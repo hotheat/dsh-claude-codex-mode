@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.0 - 2026-10-29
+
+### Changed
+
+- Codex now runs through in-process host tools backed by `ctx.jobs` instead of a mounted MCP server.
+  The session header's Background jobs panel shows live output, progress, duration and a stop button.
+- Foreground calls are visible jobs too; completed calls collect their result and remove the row, while wait timeouts hand out a job ID and leave execution running.
+- DSH `job_output`, `job_list` and `job_kill` replace `codex_cli_status/wait/result/cancel` in the host workflow.
+  The standalone bundled Codex MCP server remains available as a fallback with its original job tools.
+- Codex setup probes run asynchronously; the host and standalone server share tool schemas and the runner.
+  The Claude Code MCP mount remains exclusive to `claude-code-cli` mode.
 ## 0.3.5 - 2026-10-23
 
 ### Changed

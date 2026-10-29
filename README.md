@@ -5,7 +5,9 @@ English | [简体中文](README.zh-CN.md)
 **Discuss / Execute Split** is a [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH) bundle that splits the work in two: discussion stays read-only, and every repository code edit goes to Codex.
 
 - **Discussion** covers requirements, plans, architecture, docs, reading code, and judging whether a fix is worth making. The DSH model does this itself, or forwards it to the Claude Code CLI. The bundle is designed with Claude in mind, so in `api` mode pick a Claude model as the DSH default.
-- **Edits to code or config inside a Git repository** go to the [Codex CLI](https://github.com/openai/codex) through a bundled MCP server. They happen only after you say so ("开始吧 / 做吧 / 执行", that is, "go ahead"). DSH then reviews `git status`, `git diff`, and the test results itself before reporting back.
+- **Edits to code or config inside a Git repository** go to the [Codex CLI](https://github.com/openai/codex) through in-process host tools backed by DSH background jobs.
+  They happen only after you say so ("开始吧 / 做吧 / 执行", that is, "go ahead").
+  DSH then reviews `git status`, `git diff`, and the test results itself before reporting back.
 
 A write guard enforces this split. If the model tries to write a repository code file with a structured edit tool, the guard blocks it and tells the model how to hand the edit to Codex.
 
@@ -15,14 +17,30 @@ You choose the mode in this plugin's form on the DSH **Plugins** page. Switching
 
 | Mode | Who discusses | Who edits | MCP servers mounted |
 |---|---|---|---|
-| `api` (default) | The DSH model itself. You configure an Anthropic provider (API key) on the Models page and pick Claude | Codex | `codex-cli` |
-| `claude-code-cli` | The DSH model forwards discussion to the Claude Code CLI in read-only `review` mode, using your Claude subscription login (no API key) | Codex, called by the DSH model | `codex-cli` + `claude-code` |
+| `api` (default) | The DSH model itself. You configure an Anthropic provider (API key) on the Models page and pick Claude | Codex host tools | None |
+| `claude-code-cli` | The DSH model forwards discussion to the Claude Code CLI in read-only `review` mode, using your Claude subscription login (no API key) | Codex host tools, called by the DSH model | `claude-code` |
 
 In `claude-code-cli` mode, Claude Code cannot see the DSH session. The routing prompt therefore tells the DSH model to:
 
 - send your words and any needed context in each `mcp__claude-code__claude_code_run` call;
 - continue a topic with `resumeSessionId`;
 - relay Claude Code's conclusions faithfully.
+
+### Codex execution
+
+The host registers `codex_cli_setup`, `codex_cli_run` and `codex_cli_review` directly, sharing schemas and the runner with the bundled standalone MCP fallback.
+`codex_cli_setup` probes the executable and login asynchronously.
+Runs stream JSONL events through the host into `ctx.jobs`, so the session header's Background jobs panel shows live output, progress, duration and a stop button.
+
+Foreground calls are jobs too: they wait up to `timeoutMs` (four minutes by default), return the canonical Codex result on settlement and remove the collected row.
+If that wait expires, the process continues and the call returns a `jobId`; the row stays available after completion.
+Set `background: true` for an immediate handle; `timeoutMs` above 240000 also selects background execution and remains the process deadline.
+Use DSH `job_output` to read/wait, `job_list` to list and `job_kill` to stop a job; continue Codex with `resumeSessionId`.
+Caller abort kills and collects a foreground job before throwing; stopping from the panel terminates the whole Codex process group.
+
+The task panel requires `@deepseek-ai/dsh-jobs-local` and `@deepseek-ai/dsh-tool-jobs` in the composition.
+Without the registry, foreground calls run directly with a timeout and background calls fail with a mount hint.
+If registration is refused because the session has no job controller or has reached its job cap, the host logs a warning and runs foreground calls directly; background calls report the admission error.
 
 ### Preflight checks
 
@@ -55,7 +73,7 @@ Clicking **Check and save** runs a preflight check for the target mode first. If
 | All modes | Node.js ≥ 20 | Blocking |
 | All modes | `codex --version` succeeds | Blocking |
 | All modes | `codex login status` reports logged in | Blocking |
-| All modes | Bundled `mcp/codex-cli/server.mjs` exists | Blocking |
+| All modes | Bundled standalone MCP fallback `mcp/codex-cli/server.mjs` exists | Blocking |
 | `api` | `llm-pi-ai` has an `anthropic` provider with at least one model | Blocking |
 | `api` | The credential its `apiKeyEnv` points to exists (checked for presence only) | Blocking |
 | `api` | The default model is not Claude | Warning |
@@ -154,7 +172,8 @@ npm run doctor -- --mode claude-code-cli --profile web
 - In `api` mode it reads the selected profile's `cordis.patch.yml` without evaluating `!!js` expressions.
 - It looks for the credential in the DSH credential store, the process environment, the project `.env`, and `~/.dsh/.env`.
 
-Codex and Claude Code background job state is stored under `<DSH home>/claude-codex-mode/`.
+Codex runs use the process-local DSH job registry.
+Claude Code MCP job state is stored under `<DSH home>/claude-codex-mode/claude-code/`.
 
 ## Development
 
@@ -166,12 +185,14 @@ npm test
 node --test mcp/*/tests/*.test.mjs
 ```
 
-`npm test` runs four suites:
+`npm test` covers:
 
 - the policy tests;
 - table-driven preflight tests with injected command results;
 - the doctor and form tests;
-- a real Cordis load test that switches modes both ways and checks how the MCP servers mount and unmount.
+- shared schema validation and incremental Codex event rendering;
+- host tools with a real local DSH job registry and fake CLI subprocesses, including timeout promotion, live output, cancellation and admission fallback;
+- a real Cordis load test that switches modes both ways, keeps Codex host tools registered and mounts/unmounts only the Claude MCP server.
 
 The load test finds Cordis through `DSH_CORDIS_PATH`, and failing that through a global `@deepseek-ai/dsh` install (`npm root -g`). If neither is found, it is skipped with a message.
 

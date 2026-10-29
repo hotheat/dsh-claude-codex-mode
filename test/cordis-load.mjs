@@ -1,4 +1,4 @@
-/** Real Loader + ConfigEditor + Settings + both stdio MCP clients, with isolated CLI/auth fixtures. */
+/** Real Loader + ConfigEditor + Settings + host Codex tools + Claude stdio MCP client, with isolated CLI/auth fixtures. */
 import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -113,7 +113,11 @@ try {
   assert.ok(route)
   assert.ok(guard)
   assert.equal((await state()).body.mode, 'api')
-  assert.ok(toolMap.has('mcp__codex-cli__codex_cli_run'), 'real Codex MCP tool discovery')
+  assert.ok(toolMap.has('codex_cli_run'), 'host Codex tool registration')
+  assert.deepEqual([...toolMap.keys()].sort(), ['codex_cli_review', 'codex_cli_run', 'codex_cli_setup'])
+  const setup = await toolMap.get('codex_cli_setup').execute({ cwd: repo }, {})
+  assert.equal(setup.ready, true)
+  await assert.rejects(toolMap.get('codex_cli_run').execute({ cwd: repo, prompt: 'test', background: true }, { callId: 'no-jobs', signal: new AbortController().signal }), /background jobs unavailable/)
   assert.equal([...toolMap.keys()].some(key => key.startsWith('mcp__claude-code__')), false)
   const section = () => sections.get('mode:claude-codex-routing').text
   assert.doesNotMatch(section(), /claude_code/)
@@ -129,9 +133,9 @@ try {
   assert.match(guard(write), /codex_cli_run/)
   assert.match(guard(write), /DSH_DIRECT_EDIT/)
   assert.doesNotMatch(guard(write), /Codex 工具未上线/)
-  const codexTool = toolMap.get('mcp__codex-cli__codex_cli_run')
+  const codexTool = toolMap.get('codex_cli_run')
   toolMap.delete(codexTool.name)
-  assert.match(guard(write), /claude-codex-mode 的 codex-cli MCP 子实例/)
+  assert.match(guard(write), /宿主侧 Codex 工具注册失败/)
   toolMap.set(codexTool.name, codexTool)
   assert.equal(guard({ ...write, name: 'str_replace_editor', arguments: { command: 'view', path: join(repo, 'code.js') } }), undefined)
   assert.match(guard({ ...write, name: 'str_replace_editor', arguments: { command: 'str_replace', path: join(repo, 'code.js') } }), /codex_cli_run/)
@@ -211,7 +215,7 @@ try {
   assert.equal((await state()).body.mode, 'claude-code-cli')
   assert.equal(entry.fiber, fiber, 'volatile mode switch must keep the same host fiber')
   assert.ok(toolMap.has('mcp__claude-code__claude_code_run'), 'real Claude MCP tool discovery')
-  assert.ok(toolMap.has('mcp__codex-cli__codex_cli_run'))
+  assert.ok(toolMap.has('codex_cli_run'))
   for (const text of ['mode: "review"', '绝对 `cwd`', '用户原话', '必要上下文', 'resumeSessionId', '如实转述', '不自行改写']) assert.ok(section().includes(text))
   assert.match(guard(write), /codex_cli_run/, 'guard remains active in CLI mode')
   console.log('api -> claude-code-cli: same host fiber, Codex + Claude tools mounted, review prompt active')
@@ -247,7 +251,7 @@ try {
   assert.equal((await state()).body.mode, 'api')
   assert.equal(entry.fiber, fiber)
   assert.equal([...toolMap.keys()].some(key => key.startsWith('mcp__claude-code__')), false, 'Claude MCP unmounts')
-  assert.ok(toolMap.has('mcp__codex-cli__codex_cli_run'))
+  assert.ok(toolMap.has('codex_cli_run'))
   assert.doesNotMatch(section(), /claude_code/)
   console.log('claude-code-cli -> api: Claude tools removed, Codex retained, API prompt restored')
   directories.set(session, outside)
@@ -260,11 +264,10 @@ try {
   assert.equal(sections.size, 0)
   assert.equal(toolMap.size, 0)
   assert.equal(route, undefined)
-  console.log('bundle disposal: guard, prompt, routes and all MCP tools removed')
+  console.log('bundle disposal: guard, prompt, routes and all tools removed')
 
   for (const [serverName, mode, survivingTool] of [
-    ['codex-cli', 'api', undefined],
-    ['claude-code', 'claude-code-cli', 'mcp__codex-cli__codex_cli_run'],
+    ['claude-code', 'claude-code-cli', 'codex_cli_run'],
   ]) {
     const warnings = []
     const children = []
@@ -286,9 +289,8 @@ try {
       assert.equal((await state()).body.mode, mode)
       const denied = guard({ name: 'write', arguments: { path: join(repo, 'code.js') }, agent })
       assert.match(denied, /codex_cli_run/, 'repository-code guard stays active')
-      if (serverName === 'codex-cli') assert.match(denied, /Codex 工具未上线/)
       assert.equal([...toolMap.keys()].some(key => key.startsWith(`mcp__${serverName}__`)), false)
-      if (survivingTool) assert.ok(toolMap.has(survivingTool), 'the other MCP client remains mounted')
+      if (survivingTool) assert.ok(toolMap.has(survivingTool), 'host Codex tools remain registered')
       assert.equal(section(), plugin.routing(mode), 'routing prompt survives the failed child')
       assert.ok(warnings.some(text => text.includes(serverName) && /启动失败/.test(text) && /重新启用/.test(text)), 'warn includes the server and a fix hint')
       const failedChild = children.find(child => child.config?.serverName === serverName)

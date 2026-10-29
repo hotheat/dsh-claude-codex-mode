@@ -1,4 +1,5 @@
-import { spawn, spawnSync } from "node:child_process";
+import { execFile, spawn, spawnSync } from "node:child_process";
+import { promisify } from 'node:util'
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -136,6 +137,11 @@ export function inspectCodexSetup({ cwd, processEnv = process.env }) {
   const version = probe(executable, ["--version"], cwd, processEnv);
   const ready = version.status === 0;
   const login = ready ? probe(executable, ["login", "status"], cwd, processEnv) : null;
+  return setupResult(executable, version, login, processEnv)
+}
+
+function setupResult(executable, version, login, processEnv) {
+  const ready = version.status === 0
   // Never echo login output: API-key logins may print a partial key.
   const loginText = `${login?.stdout ?? ""}\n${login?.stderr ?? ""}`;
   const authMethod = login?.status !== 0
@@ -152,6 +158,25 @@ export function inspectCodexSetup({ cwd, processEnv = process.env }) {
       ? (version.stderr || version.error?.message || "Codex CLI probe failed").trim()
       : (login.status === 0 ? null : "Codex CLI is not logged in. Run `codex login` in a terminal.")
   };
+}
+
+const execFileAsync = promisify(execFile)
+
+export async function inspectCodexSetupAsync({ cwd, processEnv = process.env }) {
+  const executable = codexExecutable(processEnv)
+  const probeAsync = async args => {
+    try {
+      const result = await execFileAsync(executable, args, {
+        cwd, env: processEnv, encoding: 'utf8', timeout: 15_000, maxBuffer: 1024 * 1024,
+      })
+      return { ...result, status: 0 }
+    } catch (error) {
+      return { status: error.code, stdout: error.stdout, stderr: error.stderr, error }
+    }
+  }
+  const version = await probeAsync(['--version'])
+  const login = version.status === 0 ? await probeAsync(['login', 'status']) : null
+  return setupResult(executable, version, login, processEnv)
 }
 
 export function describeEvent(event) {
@@ -316,6 +341,21 @@ export async function runCodex(request, options = {}) {
           // Activity updates are best-effort and do not affect result collection.
         }
       };
+      const emitEvent = (line) => {
+        let event
+        try {
+          event = JSON.parse(line)
+        } catch {
+          // Non-JSON stdout is kept in the final summary as unparsedLines.
+          return
+        }
+        try {
+          options.onEvent?.(event)
+        } catch {
+          // Event rendering is best-effort and does not affect result collection.
+        }
+        emitActivity(describeEvent(event))
+      }
       if (input != null) {
         child.stdin.on("error", () => {});
         child.stdin.end(input);
@@ -327,13 +367,7 @@ export async function runCodex(request, options = {}) {
         lineBuffer += chunk;
         const lines = lineBuffer.split("\n");
         lineBuffer = lines.pop() ?? "";
-        for (const line of lines) {
-          try {
-            emitActivity(describeEvent(JSON.parse(line)));
-          } catch {
-            // Non-JSON stdout is kept in the final summary as unparsedLines.
-          }
-        }
+        for (const line of lines) emitEvent(line)
       });
       child.stderr.on("data", (chunk) => {
         stderr += chunk;
@@ -344,6 +378,7 @@ export async function runCodex(request, options = {}) {
       });
       child.on("close", (exitCode, signal) => {
         clearTimeout(timeout);
+        if (lineBuffer.trim()) emitEvent(lineBuffer);
         Promise.resolve(termination).then(() => resolve({ exitCode, signal, stdout, stderr, timedOut }), reject);
       });
     });

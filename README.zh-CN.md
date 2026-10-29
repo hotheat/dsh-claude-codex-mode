@@ -5,7 +5,9 @@
 **讨论执行分工**是一个 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）bundle：讨论阶段只读，修改仓库代码一律交给 Codex。
 
 - **讨论**：需求、计划、架构、文档、读代码、判断问题是否值得修，由 DSH 主模型完成，也可以由主模型转给 Claude Code CLI。本插件按 Claude 设计，`api` 模式下请把 DSH 默认模型设为 Claude。
-- **修改 Git 仓库里的代码或配置**：通过包内的 MCP server 交给 [Codex CLI](https://github.com/openai/codex)。只有你明确说「开始吧 / 做吧 / 执行」后才会执行。DSH 会自己检查 `git status`、`git diff` 和测试结果，再向你汇报。
+- **修改 Git 仓库里的代码或配置**：通过宿主进程内工具和 DSH 后台任务交给 [Codex CLI](https://github.com/openai/codex)。
+  只有你明确说「开始吧 / 做吧 / 执行」后才会执行。
+  DSH 会自己检查 `git status`、`git diff` 和测试结果，再向你汇报。
 
 写文件 guard 负责落实这条分工：模型用结构化写文件工具改仓库代码时，guard 会拦下这次写入，并告诉模型怎样交给 Codex。
 
@@ -15,14 +17,31 @@
 
 | 模式 | 讨论由谁完成 | 代码修改 | 挂载的 MCP |
 |---|---|---|---|
-| `api`（默认） | DSH 主模型本身。在模型页配置 Anthropic provider（API key）并选择 Claude | Codex | `codex-cli` |
-| `claude-code-cli` | DSH 主模型把讨论转发给 Claude Code CLI，用只读 `review` 模式和订阅登录，不需要 API key | Codex（由 DSH 主模型调用） | `codex-cli` + `claude-code` |
+| `api`（默认） | DSH 主模型本身。在模型页配置 Anthropic provider（API key）并选择 Claude | Codex 宿主工具 | 无 |
+| `claude-code-cli` | DSH 主模型把讨论转发给 Claude Code CLI，用只读 `review` 模式和订阅登录，不需要 API key | Codex 宿主工具（由 DSH 主模型调用） | `claude-code` |
 
 `claude-code-cli` 模式下，Claude Code 看不到 DSH 会话。因此路由提示词要求 DSH 主模型：
 
 - 每次调用 `mcp__claude-code__claude_code_run` 时带上你的原话和必要上下文；
 - 同一话题用 `resumeSessionId` 续接；
 - 如实转述 Claude Code 的结论。
+
+### Codex 执行链路
+
+宿主直接注册 `codex_cli_setup`、`codex_cli_run`、`codex_cli_review`，与包内独立 MCP 备用入口共用 schema 和 runner。
+`codex_cli_setup` 异步检查可执行文件和登录状态。
+执行链路为宿主工具 → Codex 子进程 → JSONL 事件渲染 → `ctx.jobs`，会话头部的「后台任务」面板显示实时输出、进度、耗时和停止按钮。
+已有任务可以直接观察，无需重复调用。
+
+前台调用同样注册为任务，等待 `timeoutMs`（默认 4 分钟）；等待期间结束时返回完整 Codex 结果，并移除已收取的任务行。
+等待超时后进程继续运行，调用返回 `jobId`；任务行会保留到完成后供查看。
+`background: true` 立即返回任务句柄；`timeoutMs` 大于 240000 时也按后台执行，并将该值作为进程运行时限。
+通过 DSH `job_output` 查看或等待、`job_list` 列表、`job_kill` 停止，用 `resumeSessionId` 续接 Codex 会话。
+前台调用中止时先终止进程、等待结束并移除任务，再抛出中止异常；面板停止会终止整个 Codex 进程组。
+
+任务面板需要在 composition 中挂载 `@deepseek-ai/dsh-jobs-local` 和 `@deepseek-ai/dsh-tool-jobs`。
+缺少任务注册表时，前台直接执行并受超时限制，后台调用报错并提示挂载依赖。
+会话缺少任务控制器或任务数达到上限导致注册失败时，记录警告，前台降级为直接执行，后台返回注册错误。
 
 ### 前置检查
 
@@ -55,7 +74,7 @@
 | 所有模式 | Node.js ≥ 20 | 阻断 |
 | 所有模式 | `codex --version` 可用 | 阻断 |
 | 所有模式 | `codex login status` 为已登录 | 阻断 |
-| 所有模式 | 包内 `mcp/codex-cli/server.mjs` 存在 | 阻断 |
+| 所有模式 | 包内独立 MCP 备用入口 `mcp/codex-cli/server.mjs` 存在 | 阻断 |
 | `api` | `llm-pi-ai` 配置了 `anthropic` provider，且至少有一个模型 | 阻断 |
 | `api` | provider 的 `apiKeyEnv` 指向的凭据存在（只查是否存在） | 阻断 |
 | `api` | 默认模型不是 Claude | 仅提示 |
@@ -154,7 +173,8 @@ npm run doctor -- --mode claude-code-cli --profile web
 - `api` 模式下读取所选 profile 的 `cordis.patch.yml`，不执行其中的 `!!js` 表达式。
 - 凭据按以下位置查找：DSH 凭据存储、进程环境变量、项目 `.env`、`~/.dsh/.env`。
 
-Codex 和 Claude Code 的后台任务状态保存在 `<DSH home>/claude-codex-mode/` 下。
+Codex 运行状态由 DSH 进程内任务注册表管理。
+Claude Code MCP 后台任务状态保存在 `<DSH home>/claude-codex-mode/claude-code/` 下。
 
 ## 开发
 
@@ -171,7 +191,9 @@ node --test mcp/*/tests/*.test.mjs
 - policy 测试；
 - 注入命令结果的表驱动 preflight 测试；
 - doctor 和表单测试；
-- 真实的 Cordis 加载测试：双向切换模式，并检查 MCP 的挂载与卸载。
+- 共用 schema 校验与 Codex 增量事件渲染测试；
+- 宿主工具与真实 DSH 本地任务注册表、模拟 CLI 子进程的集成测试，覆盖等待超时、实时输出、取消和注册失败降级；
+- 真实的 Cordis 加载测试：双向切换模式，检查 Codex 宿主工具保持注册、Claude MCP 挂载与卸载。
 
 加载测试先用 `DSH_CORDIS_PATH` 查找 Cordis，再查全局安装的 `@deepseek-ai/dsh`（`npm root -g`）。都找不到时会提示并跳过。
 
