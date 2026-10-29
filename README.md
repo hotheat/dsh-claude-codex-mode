@@ -42,6 +42,18 @@ The task panel requires `@deepseek-ai/dsh-jobs-local` and `@deepseek-ai/dsh-tool
 Without the registry, foreground calls run directly with a timeout and background calls fail with a mount hint.
 If registration is refused because the session has no job controller or has reached its job cap, the host logs a warning and runs foreground calls directly; background calls report the admission error.
 
+### Codex output
+
+In the plugin's **Discussion mode** form, **Codex output** controls where runs appear:
+
+- `jobs` (default): use `dsh-better-sidebar`'s built-in **Background jobs** drawer; the Codex tab is not registered.
+- `tab`: register a dedicated **Codex** sidebar page; requires `dsh-better-sidebar`.
+
+Changing this option saves immediately, without preflight checks or a page reload.
+With `tab` selected, open the right sidebar's **+** menu and pick **Codex** to list this session's Codex runs and stream the selected run's output live.
+The tab also supports copying output and stopping a running job with a second confirmation click.
+The `tab` option remains selectable when the sidebar plugin is absent, and the form shows an installation hint.
+
 ### Preflight checks
 
 When the form opens, it checks the current mode and shows the result:

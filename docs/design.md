@@ -1,6 +1,6 @@
 # dsh-claude-codex-mode 设计
 
-当前决策见文末「0.4.0：宿主工具与 DSH 后台任务」。
+宿主任务机制见「0.4.0：宿主工具与 DSH 后台任务」，可选侧栏入口见文末「0.5.0：Codex 标签页」。
 
 ## 0.3.0 原始设计（2026-10-23）
 
@@ -46,7 +46,7 @@ dsh-claude-codex-mode/
   lib/index.js          host 部分：Config(mode)、路由提示词、guard、MCP 挂载、preflight 路由
   lib/policy.js         写入分类（纯函数）
   lib/preflight.js      前置检查（纯逻辑，可注入 exec/fs/env，供 host 和 doctor 共用）
-  lib/client.js         浏览器部分：插件页配置表单（纯 JS + React.createElement，不需要构建）
+  lib/client.js         浏览器部分：插件页配置表单与可选 Codex 侧栏标签页（纯 JS + React.createElement，无需构建）
   mcp/codex-cli/        从 ai-skills-owner/plugins/codex-cli/mcp 原样复制
   mcp/claude-code/      从 ai-skills-owner/plugins/claude-code/mcp 原样复制
   scripts/doctor.mjs    npm run doctor
@@ -132,3 +132,17 @@ Codex 独立 MCP server、worker 和原有任务工具仍随包分发，供独�
 没有 `ctx.get('jobs')` 时，前台直接调用 runner 并使用前台超时，后台报错提示挂载 `@deepseek-ai/dsh-jobs-local` 与 `@deepseek-ai/dsh-tool-jobs`。
 注册表存在但因无控制器或达到任务上限拒绝注册时，记录警告，前台降级为直接执行，后台重抛注册错误。
 工具由 fiber effect 注册与释放，先于 preflight 等待，因此前置检查警告不影响工具注册。
+
+## 0.5.0：Codex 标签页
+
+Codex 任务继续使用宿主 `ctx.jobs`；浏览器通过 `ctx.get('jobs')` 取得客户端任务服务。
+插件配置 `codexView` 为 volatile 字段，默认 `jobs`，使用 `dsh-better-sidebar` 内置后台任务抽屉，不注册 Codex 标签页。
+选择 `tab` 时，`lib/client.js` 通过可选的 `betterSidebar` 注入注册独立 Codex 标签页，宿主执行链路不变。
+表单链路为 `settings.describe()` → 当前选项与 revision → `settings.update(ns, { codexView }, revision)` → 重新读取配置 → 立即注册或释放标签页，无需刷新页面。
+显示选项独立保存，不运行模式 preflight；宿主 `internal/config` 仍只校验模式变化，volatile 显示更新跳过 MCP 模式切换。
+`/claude-codex-mode/state` 返回当前 `mode` 与 `codexView`。
+未安装 `dsh-better-sidebar` 时，选项仍可保存，表单提示标签页依赖该插件；卸载后忽略未完成的配置读取。
+打开右侧栏的 + 菜单选择 Codex，标签页按 `scope.sessionId` 筛选 `kind: codex` 的任务。
+数据链路为 `watchRows(sessionId)` → roster store → React 订阅 → 任务列表；选中任务后，`observe(sessionId, jobId)` → observed store → 实时输出。
+观察保留输出不移动模型的读取游标；隐藏时释放 roster 与输出观察，停止操作通过 `jobs.kill` 交给宿主。
+该入口只提供已有任务的客户端视图，不创建 subagent session，因为 Codex 运行的生命周期、输出和停止能力都属于原会话的任务服务。

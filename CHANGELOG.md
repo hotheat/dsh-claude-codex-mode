@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.0 - 2026-10-29
+
+### Added
+
+- **Codex output** setting in the plugin's Discussion mode form: `jobs` (default) uses `dsh-better-sidebar`'s built-in Background jobs drawer without registering a Codex tab; `tab` opts into the dedicated **Codex** page opened from the sidebar's **+** menu.
+- Output location saves immediately without preflight checks or a page reload; the selectable `tab` option shows an installation hint when `dsh-better-sidebar` is absent.
+- Session-scoped Codex job list and live output through the host client jobs service, with follow-latest, copy, retained-output notices and a two-click stop control.
+- Row watching and output observation are released while the tab is hidden; no polling is required.
+
 ## 0.4.0 - 2026-10-29
 
 ### Changed

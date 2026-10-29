@@ -1,6 +1,6 @@
 {
   "name": "dsh-claude-codex-mode",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "type": "module",
   "description": "Discussion stays read-only, and every repository code edit goes to Codex. The discussion runs on the DSH model or through the Claude Code CLI.",
   "author": "jiaoguo",
@@ -20,7 +20,7 @@
   },
   "files": ["lib", "mcp", "scripts", "test", "locale", "cordis.patch.yml", "icon.svg", "LICENSE", "README.md", "README.zh-CN.md", "ATTRIBUTION.md", "CHANGELOG.md"],
   "scripts": {
-    "test": "node test/policy.mjs && node --test test/preflight.mjs test/doctor.mjs test/client.mjs test/codex-events.mjs test/schemas.mjs test/codex-tools.mjs && node test/cordis-load.mjs",
+    "test": "node test/policy.mjs && node --test test/preflight.mjs test/doctor.mjs test/client.mjs test/client-tab.mjs test/codex-events.mjs test/schemas.mjs test/codex-tools.mjs && node test/cordis-load.mjs",
     "doctor": "node scripts/doctor.mjs"
   },
   "dependencies": {

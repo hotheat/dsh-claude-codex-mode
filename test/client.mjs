@@ -9,7 +9,7 @@ import { JSDOM } from 'jsdom'
 
 const source = readFileSync(new URL('../lib/client.js', import.meta.url), 'utf8')
 
-async function withForm(run) {
+async function withForm(run, { hasSidebar = false, codexView } = {}) {
   const dom = new JSDOM('<div id="root"></div>', { url: 'http://localhost/' })
   const previous = { window: globalThis.window, document: globalThis.document, IS_REACT_ACT_ENVIRONMENT: globalThis.IS_REACT_ACT_ENVIRONMENT }
   Object.assign(globalThis, { window: dom.window, document: dom.window.document, IS_REACT_ACT_ENVIRONMENT: true })
@@ -18,6 +18,7 @@ async function withForm(run) {
   let Form
   let dictionaries
   let savedMode = 'api'
+  let savedCodexView = codexView
   let revision = 7
   let pass = false
   let rejectRevision = false
@@ -63,7 +64,14 @@ async function withForm(run) {
   vm.runInNewContext(source, context)
   const plugin = factory(name => { assert.equal(name, 'react'); return React })
   const effects = []
+  const sidebar = { registerTab(tab) { calls.push(['registerTab', tab.id]); return () => calls.push(['disposeTab']) } }
   plugin.apply({
+    get: name => { assert.equal(name, 'betterSidebar'); return hasSidebar ? sidebar : undefined },
+    inject: (_dependencies, callback) => { if (hasSidebar) callback({
+      betterSidebar: sidebar,
+      locale: { bind: () => key => dictionaries[locale][key] },
+      effect: fn => { effects.push(fn()) },
+    }) },
     effect: fn => { effects.push(fn()) },
     locale: { register: (_ns, locales) => { dictionaries = locales; return () => {} } },
     slots: {
@@ -75,18 +83,23 @@ async function withForm(run) {
         calls.push(['describe'])
         if (describeResponse) return describeResponse()
         return { ok: describeOk, value: { writable, namespaces: [
-        { ns: 'claude-codex-mode', revision, value: { mode: savedMode } },
+        { ns: 'claude-codex-mode', revision, value: { mode: savedMode, codexView: savedCodexView } },
       ] } }
       },
       update: async (ns, patch, expected) => {
-        calls.push(['update', ns, patch.mode, expected])
+        calls.push(['update', ns, patch.mode, expected, JSON.parse(JSON.stringify(patch))])
         if (rejectRevision) { revision++; return { ok: false, error: { message: 'conflict' } } }
         assert.equal(expected, revision)
-        savedMode = patch.mode; revision++
-        return { ok: true, value: { ns, revision, value: { mode: savedMode } } }
+        if ('mode' in patch) savedMode = patch.mode
+        if ('codexView' in patch) savedCodexView = patch.codexView
+        revision++
+        return { ok: true, value: { ns, revision, value: { mode: savedMode, codexView: savedCodexView } } }
       },
     } },
   })
+  // Finish plugin startup before measuring the existing form interaction flows.
+  await Promise.resolve()
+  calls.length = 0
   const root = createRoot(document.getElementById('root'))
   const render = async () => { await act(async () => root.render(React.createElement(Form, { t: key => dictionaries[locale][key] }))) }
   const radio = value => document.querySelectorAll('[role="radio"]')[value === 'api' ? 0 : 1]
@@ -135,6 +148,71 @@ async function withForm(run) {
     }
   }
 }
+
+test('Codex output defaults to jobs and saves each display change immediately without preflight', async () => {
+  await withForm(async ({ render, calls, select, radio, submit, setPass }) => {
+    await render()
+    const option = value => document.querySelector(`input[name="codexView"][value="${value}"]`)
+    assert.equal(document.querySelector('.dcm-codex-view h4').textContent, 'Codex 输出位置')
+    assert.equal(document.querySelectorAll('input[name="codexView"]').length, 2)
+    assert.equal(option('jobs').checked, true)
+    assert.match(option('jobs').parentElement.textContent, /后台任务（默认）.*后台任务抽屉/)
+    assert.match(option('tab').parentElement.textContent, /侧栏 Codex Tab.*独立的侧栏页面/)
+    assert.equal(document.querySelector('.dcm-sidebar-hint'), null)
+    await select('claude-code-cli')
+    const modeMessage = document.querySelector('.dcm-message').textContent
+    const before = calls.length
+    await act(async () => option('tab').click())
+    assert.equal(option('tab').checked, true)
+    assert.equal(radio('claude-code-cli').getAttribute('aria-checked'), 'true', 'display save preserves the staged mode')
+    assert.equal(document.querySelector('.dcm-message').textContent, modeMessage)
+    assert.deepEqual(calls.slice(before).map(call => call[0]), ['update', 'describe', 'registerTab'])
+    assert.deepEqual(calls[before], ['update', 'claude-codex-mode', undefined, 7, { codexView: 'tab' }])
+    await act(async () => option('jobs').click())
+    assert.equal(option('jobs').checked, true)
+    assert.deepEqual(calls.at(-3), ['update', 'claude-codex-mode', undefined, 8, { codexView: 'jobs' }])
+    assert.deepEqual(calls.at(-1), ['disposeTab'])
+    assert.equal(calls.filter(call => call[0] === 'registerTab').length, 1)
+    assert.equal(calls.filter(call => call[1]?.includes('/preflight')).length, 0)
+    setPass(true)
+    await submit()
+    assert.deepEqual(calls.findLast(call => call[0] === 'update'),
+      ['update', 'claude-codex-mode', 'claude-code-cli', 9, { mode: 'claude-code-cli' }])
+    assert.equal(option('jobs').checked, true)
+  }, { hasSidebar: true })
+})
+
+test('rejected Codex output updates preserve selection and the registered tab and show the failure line', async () => {
+  for (const codexView of ['jobs', 'tab']) {
+    await withForm(async ({ render, calls, setRejectRevision }) => {
+      await render()
+      setRejectRevision(true)
+      const next = codexView === 'jobs' ? 'tab' : 'jobs'
+      await act(async () => document.querySelector(`input[name="codexView"][value="${next}"]`).click())
+      assert.equal(document.querySelector(`input[name="codexView"][value="${codexView}"]`).checked, true)
+      assert.match(document.querySelector('.dcm-codex-view [role="alert"]').textContent, /保存失败/)
+      assert.equal(calls.some(call => ['registerTab', 'disposeTab'].includes(call[0])), false)
+      assert.equal(calls.filter(call => call[1]?.includes('/preflight')).length, 0)
+    }, { hasSidebar: true, codexView })
+  }
+})
+
+test('Codex output remains selectable without the sidebar and localizes its dependency hint', async () => {
+  for (const locale of ['zh', 'en']) {
+    await withForm(async ({ render, calls, setLocale }) => {
+      setLocale(locale)
+      await render()
+      assert.equal(document.querySelector('.dcm-codex-view h4').textContent, locale === 'zh' ? 'Codex 输出位置' : 'Codex output')
+      assert.match(document.querySelector('.dcm-sidebar-hint').textContent, /dsh-better-sidebar/)
+      const tab = document.querySelector('input[name="codexView"][value="tab"]')
+      assert.equal(tab.disabled, false)
+      await act(async () => tab.click())
+      assert.equal(tab.checked, true)
+      assert.equal(calls.some(call => call[0] === 'registerTab'), false)
+      assert.deepEqual(calls.find(call => call[0] === 'update')[4], { codexView: 'tab' })
+    })
+  }
+})
 
 test('form refuses failed checks, displays each hint, preserves revision, saves warnings and resets on unmount', async () => {
   await withForm(async fixture => {
