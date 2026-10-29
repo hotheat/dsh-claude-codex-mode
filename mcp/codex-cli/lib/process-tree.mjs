@@ -48,6 +48,9 @@ export async function terminateProcessGroup(pid, { graceMs = 1000 } = {}) {
     throw new Error(`Process group ${pid} remained alive after taskkill.`);
   }
 
+  // SIGINT lets Codex cancel its sandboxed command; SIGTERM alone leaves it orphaned.
+  signalPosixProcessGroup(pid, "SIGINT");
+  if (await waitForProcessGroupExit(pid, graceMs)) return;
   signalPosixProcessGroup(pid, "SIGTERM");
   if (await waitForProcessGroupExit(pid, graceMs)) return;
   signalPosixProcessGroup(pid, "SIGKILL");

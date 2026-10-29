@@ -160,25 +160,60 @@ test('background and long timeouts return immediately with live output and a fin
   }
 })
 
-test('task-panel kill terminates the whole process group and preserves the first reason', { skip: !runtime || process.platform === 'win32' }, async t => {
+test('task-panel kill lets Codex stop its detached command and records the registry reason once', { skip: !runtime || process.platform === 'win32' }, async t => {
   const jobs = await registry(t)
   const f = fixture(t, jobs, `
 const { spawn } = await import('node:child_process');
-const child = spawn(process.execPath, ['-e', "process.on('SIGTERM', () => {}); require('node:fs').writeFileSync('child-ready', ''); setInterval(() => {}, 1000)"], { stdio: 'ignore' });
-fs.writeFileSync('pids.json', JSON.stringify([process.pid, child.pid]));
+const grandchild = spawn(process.execPath, ['-e', "require('node:fs').writeFileSync('grandchild.pid', String(process.pid)); setInterval(() => {}, 1000)"], { detached: true, stdio: 'ignore' });
+process.once('SIGINT', () => {
+  grandchild.once('exit', () => process.kill(process.pid, 'SIGINT'));
+  grandchild.kill('SIGTERM');
+});
+fs.writeFileSync('codex.pid', String(process.pid));
 emit({ type: 'thread.started', thread_id: 'kill-thread' });
 await new Promise(() => {});
 `)
   const handle = await f.call({ background: true })
-  await until(() => existsSync(join(f.cwd, 'pids.json')) && existsSync(join(f.cwd, 'child-ready')))
-  const [pid, childPid] = JSON.parse(readFileSync(join(f.cwd, 'pids.json'), 'utf8'))
+  await until(() => existsSync(join(f.cwd, 'codex.pid')) && existsSync(join(f.cwd, 'grandchild.pid')))
+  const pid = Number(readFileSync(join(f.cwd, 'codex.pid'), 'utf8'))
+  const grandchildPid = Number(readFileSync(join(f.cwd, 'grandchild.pid'), 'utf8'))
+  t.after(() => {
+    for (const value of [pid, grandchildPid]) {
+      try { process.kill(value, 'SIGKILL') } catch (error) { if (error.code !== 'ESRCH') throw error }
+    }
+  })
+  assert.equal(isProcessGroupAlive(grandchildPid), true, 'grandchild starts in its own process group')
   assert.equal(jobs.kill(handle.jobId, undefined, 'panel stop'), 'requested')
-  jobs.kill(handle.jobId, undefined, 'second reason')
   const settled = await jobs.wait(handle.jobId, 5000)
   assert.equal(settled.status, 'killed')
   assert.match(settled.detail, /panel stop/)
   assert.equal(isProcessGroupAlive(pid), false, 'job settles only after the whole process group exits')
-  assert.throws(() => process.kill(childPid, 0), { code: 'ESRCH' })
+  assert.throws(() => process.kill(grandchildPid, 0), { code: 'ESRCH' })
+  assert.doesNotMatch(settled.detail, /panel stop; panel stop/)
+  assert.match(settled.detail, /^signal: SIGINT; panel stop$/)
+})
+
+test('producer cancel is idempotent and settles once with process facts only', { skip: process.platform === 'win32' }, async t => {
+  for (const exitNormally of [false, true]) {
+    let hooks
+    let done
+    let progress
+    let settlements = 0
+    const jobs = { start(spec) {
+      hooks = spec.run({ append() {}, updateProgress(value) { progress = value } })
+      done = hooks.done.then(value => { settlements++; return value })
+      return 'codex-cancel-test'
+    } }
+    const f = fixture(t, jobs, `${exitNormally ? "process.on('SIGINT', () => process.exit(0));" : ''}\n${liveBody}`)
+    await f.call({ background: true })
+    await until(() => progress === 'exec: sleep')
+    assert.doesNotThrow(() => { hooks.cancel('first'); hooks.cancel('first') })
+    const settled = await done
+    assert.equal(settled.status, 'killed')
+    assert.equal(settled.detail, exitNormally ? 'stopped' : 'signal: SIGINT')
+    assert.equal(settlements, 1)
+    assert.deepEqual(f.warnings, [])
+  }
 })
 
 test('caller abort kills, awaits settlement and removes its foreground row before throwing', { skip: !runtime }, async t => {
@@ -225,6 +260,27 @@ test('failed processes and spawn errors settle jobs without unhandled rejections
   assert.equal(jobs.list().length, 1, 'only the handed-out background job remains')
 })
 
+test('failure details collapse whitespace and truncate while canonical failures retain their text', { skip: !runtime }, async t => {
+  const jobs = await registry(t)
+  const text = `  fixture\n\t failed   ${'x'.repeat(250)}  \n`
+  const expected = `fixture failed ${'x'.repeat(250)}`.slice(0, 200)
+  for (const source of ['error', 'stderr']) {
+    const body = source === 'error'
+      ? `emit({ type: 'error', message: ${JSON.stringify(text)} }); process.stderr.write('fallback stderr'); process.exit(2);`
+      : `process.stderr.write(${JSON.stringify(text)}); process.exit(2);`
+    const f = fixture(t, jobs, body)
+    const outcome = await f.call()
+    assert.equal(outcome.status, 'failed')
+    assert.equal(source === 'error' ? outcome.errors[0] : outcome.stderrTail, source === 'error' ? text : text.trim())
+    const handle = await f.call({ background: true })
+    const settled = await jobs.wait(handle.jobId, 5000)
+    assert.equal(settled.status, 'failed')
+    assert.equal(settled.detail, expected)
+    assert.equal(settled.detail.length, 200)
+    assert.doesNotMatch(settled.detail, /[\r\n\t]/)
+  }
+})
+
 test('job metadata carries the owner and root call and review label', async t => {
   const specs = []
   const completions = []
@@ -245,7 +301,7 @@ test('job metadata carries the owner and root call and review label', async t =>
   await Promise.all(completions)
 })
 
-test('explicit background timeout reaches the runner; foreground panel stop returns canonical outcome', { skip: !runtime }, async t => {
+test('explicit background timeout reaches the runner; foreground panel stop returns canonical outcome', { skip: !runtime || process.platform === 'win32' }, async t => {
   const jobs = await registry(t)
   const f = fixture(t, jobs, liveBody)
   const handle = await f.call({ background: true, timeoutMs: 1000 })
@@ -258,7 +314,8 @@ test('explicit background timeout reaches the runner; foreground panel stop retu
   assert.equal(result.status, 'killed')
   assert.equal(result.stoppedByUser, true)
   assert.match(result.stopReason, /panel stop/)
-  assert.equal(result.signal, 'SIGTERM')
+  assert.equal(result.stopReason, 'signal: SIGINT; panel stop')
+  assert.equal(result.signal, 'SIGINT')
   assert.equal(result.sessionId, 'live-thread')
   assert.ok(Array.isArray(result.commands))
   assert.ok(Array.isArray(result.fileChanges))
