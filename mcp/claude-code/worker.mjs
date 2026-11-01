@@ -48,7 +48,10 @@ if (!jobId) {
             ...record,
             phase: "running",
             lastActivityAt: new Date().toISOString(),
-            recentOutputSummary: activity.summary
+            recentToolCall: activity.stream === "stdout" && activity.events != null
+              ? activity.lastTool
+              : record.recentToolCall,
+            recentOutputSummary: activity.events != null ? `${activity.events} events` : activity.summary
           }));
         }
       });

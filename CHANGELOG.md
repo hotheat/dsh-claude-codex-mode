@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.7.0 - 2026-11-02
+
+### Added
+
+- `claude_code_run` 支持显式传入 `outputFormat: "stream"`，通过 `stream-json` 与 `--verbose` 上报事件数和最近的工具名，并从最后一条 `result` 事件提取结果。
+- 新增可选参数 `stallAfterMs`，stdout 和 stderr 均无输出超过阈值时终止进程组，返回失败状态及 `stalled: true`。
+
+### 调用方需要做的事
+
+- 默认输出仍为 `json`，默认行为不变。
+- 需要进度时显式传入 `outputFormat: "stream"`；需要空闲终止时设置 `stallAfterMs`。
+
 ## 0.6.0 - 2026-11-02
 
 ### Changed
