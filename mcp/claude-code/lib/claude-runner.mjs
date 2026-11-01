@@ -73,7 +73,9 @@ export function buildClaudeArgs(request) {
     ? [...preamble, "", request.prompt.trim()].join("\n")
     : request.prompt.trim();
 
-  const args = ["--print", "--output-format", "json", "--prompt-suggestions", "false"];
+  const args = request.outputFormat === "stream"
+    ? ["--print", "--output-format", "stream-json", "--verbose", "--prompt-suggestions", "false"]
+    : ["--print", "--output-format", "json", "--prompt-suggestions", "false"];
   if (request.model) args.push("--model", request.model);
   if (request.effort) args.push("--effort", request.effort);
   if (mode !== "task") {
@@ -128,7 +130,17 @@ export function inspectClaudeSetup(options) {
   };
 }
 
-function parseClaudeOutput(stdout) {
+export function parseClaudeStreamOutput(stdout) {
+  let result = null;
+  for (const line of stdout.split(/\r?\n/)) {
+    const event = parseClaudeOutput(line);
+    if (event?.type === "result") result = event;
+  }
+  return result;
+}
+
+function parseClaudeOutput(stdout, outputFormat = "json") {
+  if (outputFormat === "stream") return parseClaudeStreamOutput(stdout);
   try {
     return JSON.parse(stdout);
   } catch {
@@ -175,6 +187,7 @@ function hasCompletionBlockers(text) {
 function classifyClaudeResult(rawResult, parsed, hasValidOutput, mode, expectedModel) {
   const baseSucceeded = rawResult.exitCode === 0
     && !rawResult.timedOut
+    && !rawResult.stalled
     && hasValidOutput
     && parsed.is_error !== true;
   if (!baseSucceeded) {
@@ -234,15 +247,51 @@ export async function runClaude(request, options = {}) {
     let stdout = "";
     let stderr = "";
     let timedOut = false;
+    let stalled = false;
     let termination;
+    let lastOutputAt = Date.now();
+    let streamBuffer = "";
+    let events = 0;
+    let lastTool = null;
+    let lastActivityAt = 0;
+    let activityTimer;
+    const emitStreamActivity = () => {
+      activityTimer = undefined;
+      lastActivityAt = Date.now();
+      emitActivity({ stream: "stdout", events, lastTool });
+    };
+    const consumeStreamLine = (line) => {
+      const event = parseClaudeOutput(line);
+      if (event === null) return;
+      events += 1;
+      if (event.type === "assistant") {
+        const content = event.message?.content;
+        lastTool = Array.isArray(content)
+          ? content.filter((block) => block?.type === "tool_use").at(-1)?.name ?? null
+          : null;
+      }
+    };
+    const clearTimers = () => {
+      clearTimeout(timeout);
+      clearInterval(stallCheck);
+      clearTimeout(activityTimer);
+    };
     const timeout = setTimeout(() => {
       timedOut = true;
+      clearTimers();
       termination = terminateProcessGroup(child.pid);
     }, timeoutMs);
+    const stallCheck = request.stallAfterMs != null ? setInterval(() => {
+      if (Date.now() - lastOutputAt > request.stallAfterMs) {
+        stalled = true;
+        clearTimers();
+        termination = terminateProcessGroup(child.pid);
+      }
+    }, Math.max(200, Math.min(request.stallAfterMs, 15_000))) : undefined;
     try {
       options.onSpawn?.(child.pid);
     } catch (error) {
-      clearTimeout(timeout);
+      clearTimers();
       void terminateProcessGroup(child.pid);
       reject(error);
       return;
@@ -250,26 +299,44 @@ export async function runClaude(request, options = {}) {
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk) => {
+      lastOutputAt = Date.now();
       stdout += chunk;
-      emitActivity({ stream: "stdout", summary: String(chunk).slice(-500) });
+      if (request.outputFormat !== "stream") {
+        emitActivity({ stream: "stdout", summary: String(chunk).slice(-500) });
+        return;
+      }
+      streamBuffer += chunk;
+      const lines = streamBuffer.split(/\r?\n/);
+      streamBuffer = lines.pop();
+      const previousEvents = events;
+      for (const line of lines) consumeStreamLine(line);
+      if (events === previousEvents) return;
+      const delay = lastActivityAt ? Math.max(0, 1000 - (Date.now() - lastActivityAt)) : 1000;
+      if (!activityTimer) activityTimer = setTimeout(emitStreamActivity, delay);
     });
     child.stderr.on("data", (chunk) => {
+      lastOutputAt = Date.now();
       stderr += chunk;
       emitActivity({ stream: "stderr", summary: String(chunk).slice(-500) });
     });
     child.on("error", (error) => {
-      clearTimeout(timeout);
+      clearTimers();
       reject(new Error(`Failed to start Claude CLI (${executable}): ${error.message}`));
     });
     child.on("close", (exitCode, signal) => {
-      clearTimeout(timeout);
+      const previousEvents = events;
+      if (request.outputFormat === "stream" && streamBuffer) consumeStreamLine(streamBuffer);
+      const pendingActivity = activityTimer || events !== previousEvents;
+      clearTimers();
+      // Short runs still report activity; longer runs keep the one-second throttle.
+      if (pendingActivity && Date.now() - lastActivityAt >= 1000) emitStreamActivity();
       Promise.resolve(termination).then(() => {
-        resolve({ exitCode, signal, stdout, stderr, timedOut });
+        resolve({ exitCode, signal, stdout, stderr, timedOut, stalled });
       }, reject);
     });
   });
 
-  const parsed = parseClaudeOutput(result.stdout);
+  const parsed = parseClaudeOutput(result.stdout, request.outputFormat);
   const hasValidOutput = parsed !== null && typeof parsed === "object" && !Array.isArray(parsed);
   const modelsUsed = reportedModels(parsed);
   const classification = classifyClaudeResult(
@@ -285,6 +352,7 @@ export async function runClaude(request, options = {}) {
     exitCode: result.exitCode,
     signal: result.signal,
     timedOut: result.timedOut,
+    stalled: result.stalled === true,
     startedAt,
     completedAt,
     sessionId: parsed?.session_id ?? null,

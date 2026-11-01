@@ -168,6 +168,10 @@ test("MCP server lists tools and completes a background Claude job", async (t) =
   assert.equal(runTool.inputSchema.properties.settingsFile.type, "string");
   assert.deepEqual(runTool.inputSchema.properties.mode.enum, ["discuss", "review", "task"]);
   assert.equal(runTool.inputSchema.properties.mode.default, "discuss");
+  assert.deepEqual(runTool.inputSchema.properties.outputFormat.enum, ["json", "stream"]);
+  assert.equal(runTool.inputSchema.properties.outputFormat.default, "json");
+  assert.equal(runTool.inputSchema.properties.stallAfterMs.type, "integer");
+  assert.equal(runTool.inputSchema.properties.stallAfterMs.minimum, 1000);
   assert.match(runTool.description, /^Run a Claude Code CLI discussion, review, or task/);
   assert.deepEqual(setupTool.inputSchema.properties.environmentPolicy.enum, ["inherit", "settings"]);
   assert.equal(runTool.inputSchema.properties.expectedModel.type, "string");
@@ -209,6 +213,50 @@ test("MCP server lists tools and completes a background Claude job", async (t) =
     arguments: { cwd: root, prompt: "Long work", timeoutMs: 240001 }
   }));
   assert.match(autoBackground.jobId, /^claude-/);
+});
+
+test("MCP stream jobs expose progress before reporting a stalled outcome", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "claude-code-stream-mcp-"));
+  fs.mkdirSync(path.join(root, ".git"));
+  const executable = path.join(root, "fake-claude-stream.mjs");
+  fs.writeFileSync(executable, `#!/usr/bin/env node
+console.log(JSON.stringify({ type: "system", subtype: "init" }));
+console.log(JSON.stringify({
+  type: "assistant", message: { content: [{ type: "tool_use", name: "Read" }] }
+}));
+setTimeout(() => {}, 5000);
+`);
+  fs.chmodSync(executable, 0o755);
+  const server = startServer({
+    CLAUDE_CODE_CLI_PATH: executable,
+    CODEX_CLAUDE_CODE_STATE_DIR: path.join(root, "jobs")
+  });
+  t.after(() => server.child.kill("SIGTERM"));
+  const started = toolPayload(await server.request(1, "tools/call", {
+    name: "claude_code_run",
+    arguments: {
+      cwd: root, prompt: "Observe progress", background: true, outputFormat: "stream", stallAfterMs: 1500
+    }
+  }));
+  let id = 2;
+  let progress;
+  let completed;
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const job = toolPayload(await server.request(id++, "tools/call", {
+      name: "claude_code_result", arguments: { jobId: started.jobId }
+    }));
+    if (job.status === "running" && job.recentToolCall === "Read") progress = job;
+    if (job.status === "failed" || job.status === "completed") {
+      completed = job;
+      break;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  assert.ok(progress, "stream progress must be visible while the job is running");
+  assert.equal(progress.recentOutputSummary, "2 events");
+  assert.equal(completed.status, "failed");
+  assert.equal(completed.outcome.stalled, true);
+  assert.equal(completed.outcome.timedOut, false);
 });
 
 test("MCP approve resumes a job waiting on Claude permissions", async (t) => {

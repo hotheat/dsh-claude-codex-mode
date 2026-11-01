@@ -40,6 +40,15 @@ In `claude-code-cli` mode, Claude Code cannot see the DSH session. The routing p
 Both modes ignore caller overrides for `permissionMode`, `allowedTools`, `allowedCommands`, `disallowedTools`, `mcpConfigFile` and `strictMcpConfig`.
 Repository code edits still go to Codex through the routing rules below.
 
+`outputFormat` defaults to `"json"`, which returns output when the process finishes.
+Set `outputFormat: "stream"` explicitly when progress is needed; this passes `--output-format stream-json --verbose` to Claude Code.
+Stdout events flow through the runner to the background worker, which updates the job's event count, latest assistant tool name and last activity time, with activity reports throttled to once per second.
+The final result, cost, duration, session and model usage come from the last `result` event.
+
+Set `stallAfterMs` (minimum 1000) to terminate the process group after that many milliseconds without stdout or stderr data.
+The outcome reports `status: "failed"`, `stalled: true` and `timedOut: false`, preserving stderr.
+This idle limit is optional and separate from `timeoutMs`, the total execution deadline.
+
 ### Codex execution
 
 The host registers `codex_cli_setup`, `codex_cli_run` and `codex_cli_review` directly, sharing schemas and the runner with the bundled standalone MCP fallback.

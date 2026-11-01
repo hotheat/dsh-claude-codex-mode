@@ -8,6 +8,7 @@ import { isProviderRoutingEnvironmentKey, resolveSettingsFile } from "../lib/con
 import {
   buildClaudeArgs,
   inspectClaudeSetup,
+  parseClaudeStreamOutput,
   runClaude as runClaudeUnisolated
 } from "../lib/claude-runner.mjs";
 
@@ -41,6 +42,29 @@ console.log(JSON.stringify({
   session_id: "session-test",
   is_error: false,
   total_cost_usd: 0
+}));
+`);
+  fs.chmodSync(executable, 0o755);
+  return executable;
+}
+
+function createStreamingFakeClaude(root, { stall = false } = {}) {
+  const executable = path.join(root, "fake-claude-stream.mjs");
+  fs.writeFileSync(executable, stall ? `#!/bin/sh
+printf '%s\\n' '{"type":"system","subtype":"init","session_id":"stream-session"}'
+printf '%s\\n' 'waiting for provider' >&2
+sleep 5 &
+printf '%s\\n' "$!" > "$CLAUDE_TEST_PID_FILE"
+wait
+` : `#!${process.execPath}
+console.log(JSON.stringify({ type: "system", subtype: "init", session_id: "stream-session" }));
+console.log(JSON.stringify({
+  type: "assistant", message: { content: [{ type: "tool_use", name: "Read", id: "read-1", input: {} }] }
+}));
+console.log(JSON.stringify({
+  type: "result", result: "stream finished", is_error: false,
+  total_cost_usd: 0.125, duration_ms: 42, session_id: "stream-session",
+  modelUsage: { "claude-test": { inputTokens: 10, outputTokens: 5 } }
 }));
 `);
   fs.chmodSync(executable, 0o755);
@@ -112,6 +136,169 @@ test("buildClaudeArgs forces reviews to plan mode", () => {
   assert.match(args.at(-1), /Do not modify files/);
   assert.match(args.at(-1), /ordered by severity/);
   assert.doesNotMatch(args.at(-1), /Answer the request/);
+});
+
+test("buildClaudeArgs requests stream-json with verbose when outputFormat is stream", () => {
+  const request = { prompt: "Inspect progress" };
+  const args = buildClaudeArgs({ ...request, outputFormat: "stream" });
+  assert.deepEqual(args.slice(0, 6), [
+    "--print", "--output-format", "stream-json", "--verbose", "--prompt-suggestions", "false"
+  ]);
+  const defaults = buildClaudeArgs(request);
+  assert.equal(defaults.includes("--verbose"), false);
+  assert.deepEqual(args.slice(6), defaults.slice(5));
+});
+
+test("runClaude parses stream result text, cost, session, duration, and models", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "claude-code-stream-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const executable = createStreamingFakeClaude(root);
+  const outcome = await runClaude({
+    cwd: root, prompt: "Stream progress", outputFormat: "stream", expectedModel: "claude-test"
+  }, { processEnv: { ...process.env, CLAUDE_CODE_CLI_PATH: executable } });
+  assert.equal(outcome.status, "completed");
+  assert.equal(outcome.result, "stream finished");
+  assert.equal(outcome.totalCostUsd, 0.125);
+  assert.equal(outcome.sessionId, "stream-session");
+  assert.equal(outcome.durationMs, 42);
+  assert.deepEqual(outcome.modelsUsed, ["claude-test"]);
+  assert.equal(outcome.stalled, false);
+});
+
+test("runClaude terminates a stalled stream without losing stderr", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "claude-code-stall-"));
+  const executable = createStreamingFakeClaude(root, { stall: true });
+  const pidFile = path.join(root, "sleep.pid");
+  let pid;
+  t.after(() => {
+    const sleepPid = fs.existsSync(pidFile) ? Number(fs.readFileSync(pidFile, "utf8")) : null;
+    for (const childPid of [pid, sleepPid]) {
+      if (childPid && isProcessAlive(childPid)) process.kill(childPid, "SIGKILL");
+    }
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  const startedAt = Date.now();
+  const outcome = await runClaude({
+    cwd: root, prompt: "Stop on silence", outputFormat: "stream", stallAfterMs: 300
+  }, {
+    processEnv: { ...process.env, CLAUDE_CODE_CLI_PATH: executable, CLAUDE_TEST_PID_FILE: pidFile },
+    onSpawn(value) { pid = value; }
+  });
+  assert.equal(outcome.stalled, true);
+  assert.equal(outcome.timedOut, false);
+  assert.equal(outcome.status, "failed");
+  assert.equal(outcome.isError, true);
+  assert.equal(outcome.pendingApproval, null);
+  assert.equal(outcome.verificationError, null);
+  assert.equal(outcome.stderr, "waiting for provider");
+  assert.equal(await waitForProcessExit(pid), true);
+  const sleepPid = Number(fs.readFileSync(pidFile, "utf8"));
+  assert.equal(await waitForProcessExit(sleepPid), true);
+  assert.ok(Date.now() - startedAt < 5000, "stall must terminate the five-second process early");
+});
+
+test("runClaude reports stream activity with event counts and the last tool", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "claude-code-stream-activity-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const executable = createStreamingFakeClaude(root);
+  const activities = [];
+  await runClaude({ cwd: root, prompt: "Show progress", outputFormat: "stream" }, {
+    processEnv: { ...process.env, CLAUDE_CODE_CLI_PATH: executable },
+    onActivity(activity) { activities.push(activity); }
+  });
+  assert.ok(activities.some((activity) => activity.stream === "stdout"
+    && activity.events >= 2 && activity.lastTool === "Read"));
+  assert.ok(activities.every((activity) => !Object.hasOwn(activity, "summary")));
+});
+
+test("parseClaudeStreamOutput skips malformed lines and returns the last result or null", () => {
+  const result = { type: "result", result: "last result", is_error: false };
+  assert.deepEqual(parseClaudeStreamOutput([
+    "invalid-json", JSON.stringify({ type: "result", result: "older result" }),
+    JSON.stringify({ type: "assistant", message: { content: [] } }), "{partial",
+    JSON.stringify(result), JSON.stringify({ type: "system" }), ""
+  ].join("\r\n")), result);
+  assert.equal(parseClaudeStreamOutput('{"type":"system"}\n{broken\n'), null);
+  assert.equal(parseClaudeStreamOutput(""), null);
+});
+
+test("runClaude buffers split stream lines, throttles activity, and clears the last tool", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "claude-code-stream-chunks-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const executable = path.join(root, "fake-claude-chunks.mjs");
+  fs.writeFileSync(executable, `#!/usr/bin/env node
+process.stdout.write('{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Re');
+setTimeout(() => process.stdout.write('ad"}]}}\\r\\ninvalid-json\\n'), 50);
+const heartbeat = setInterval(() => console.log(JSON.stringify({ type: "system" })), 50);
+setTimeout(() => console.log(JSON.stringify({
+  type: "assistant", message: { content: [{ type: "text", text: "Continuing" }] }
+})), 1250);
+setTimeout(() => {
+  clearInterval(heartbeat);
+  process.stdout.write(JSON.stringify({ type: "result", result: "chunked result", is_error: false }));
+}, 2250);
+`);
+  fs.chmodSync(executable, 0o755);
+  const activities = [];
+  const outcome = await runClaude({ cwd: root, prompt: "Show progress", outputFormat: "stream" }, {
+    processEnv: { ...process.env, CLAUDE_CODE_CLI_PATH: executable },
+    onActivity(activity) { activities.push({ ...activity, at: Date.now() }); }
+  });
+  assert.equal(outcome.status, "completed");
+  assert.equal(outcome.result, "chunked result");
+  assert.equal(activities[0].lastTool, "Read");
+  assert.equal(activities.at(-1).lastTool, null);
+  assert.ok(activities.length >= 2 && activities.length <= 3);
+  for (let index = 1; index < activities.length; index += 1) {
+    assert.ok(activities[index].at - activities[index - 1].at >= 950);
+    assert.ok(activities[index].events > activities[index - 1].events);
+  }
+});
+
+test("runClaude refreshes the stall deadline on either stdout or stderr data", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "claude-code-stall-heartbeats-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  for (const stream of ["stdout", "stderr"]) {
+    const executable = path.join(root, `fake-claude-${stream}.mjs`);
+    fs.writeFileSync(executable, `#!/usr/bin/env node
+let count = 0;
+const heartbeat = setInterval(() => {
+  process.${stream}.write("heartbeat\\n");
+  if (++count === 8) {
+    clearInterval(heartbeat);
+    console.log(JSON.stringify({ type: "result", result: "still active", is_error: false }));
+  }
+}, 200);
+`);
+    fs.chmodSync(executable, 0o755);
+    const outcome = await runClaude({
+      cwd: root, prompt: "Keep running while output arrives", outputFormat: "stream", stallAfterMs: 1000
+    }, { processEnv: { ...process.env, CLAUDE_CODE_CLI_PATH: executable } });
+    assert.equal(outcome.status, "completed", stream);
+    assert.equal(outcome.stalled, false, stream);
+  }
+});
+
+test("runClaude preserves default JSON and stderr activity summaries", async (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "claude-code-json-activity-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const executable = path.join(root, "fake-claude-json-activity.mjs");
+  fs.writeFileSync(executable, `#!/usr/bin/env node
+console.error("diagnostic");
+console.log(JSON.stringify({ result: "done", is_error: false }));
+`);
+  fs.chmodSync(executable, 0o755);
+  const activities = [];
+  const outcome = await runClaude({ cwd: root, prompt: "Default JSON", stallAfterMs: 1000 }, {
+    processEnv: { ...process.env, CLAUDE_CODE_CLI_PATH: executable },
+    onActivity(activity) { activities.push(activity); }
+  });
+  assert.equal(outcome.status, "completed");
+  assert.equal(outcome.stalled, false);
+  assert.equal(outcome.stderr, "diagnostic");
+  assert.ok(activities.some((activity) => activity.stream === "stdout" && activity.summary.includes('"done"')));
+  assert.ok(activities.some((activity) => activity.stream === "stderr" && activity.summary === "diagnostic\n"));
+  assert.ok(activities.every((activity) => !Object.hasOwn(activity, "events")));
 });
 
 test("buildClaudeArgs rejects task mode without an explicit permission mode", () => {

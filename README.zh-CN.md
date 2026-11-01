@@ -40,6 +40,15 @@
 两者均忽略调用方传入的 `permissionMode`、`allowedTools`、`allowedCommands`、`disallowedTools`、`mcpConfigFile` 和 `strictMcpConfig` 覆盖值。
 仓库代码改动仍按下方路由规则交给 Codex。
 
+`outputFormat` 默认为 `"json"`，进程结束后才返回输出。
+需要进度时显式传入 `outputFormat: "stream"`，调用 Claude Code 时会带上 `--output-format stream-json --verbose`。
+stdout 事件经 runner 传给后台 worker，由 worker 更新 job 的事件数、最近一次 assistant 消息中的工具名和活动时间，活动上报按 1 秒节流。
+最终结果、费用、耗时、会话和模型用量取自最后一条 `result` 事件。
+
+可选参数 `stallAfterMs`（最小 1000）指定 stdout 和 stderr 均无输出多久后终止进程组。
+此时 outcome 带有 `status: "failed"`、`stalled: true`、`timedOut: false`，并保留 stderr。
+它与限制总运行时长的 `timeoutMs` 独立。
+
 ### Codex 执行链路
 
 宿主直接注册 `codex_cli_setup`、`codex_cli_run`、`codex_cli_review`，与包内独立 MCP 备用入口共用 schema 和 runner。
