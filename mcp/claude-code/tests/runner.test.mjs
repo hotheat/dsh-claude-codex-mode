@@ -65,12 +65,41 @@ async function waitForProcessExit(pid, timeoutMs = 2000) {
   return !isProcessAlive(pid);
 }
 
+for (const mode of [undefined, "discuss"]) {
+  test(`buildClaudeArgs ${mode === undefined ? "defaults to read-only discussion" : "forces discussions to plan mode"}`, () => {
+    const request = {
+      prompt: "  Discuss this plan  ",
+      permissionMode: "acceptEdits",
+      allowedTools: ["Write", "Bash(git *)"],
+      allowedCommands: ["node"],
+      disallowedTools: ["Read"],
+      mcpConfigFile: "/tmp/untrusted-mcp.json",
+      strictMcpConfig: false
+    };
+    if (mode !== undefined) request.mode = mode;
+    const args = buildClaudeArgs(request);
+    assert.deepEqual(args, [
+      "--print", "--output-format", "json", "--prompt-suggestions", "false",
+      "--permission-mode", "plan", "--safe-mode", "--strict-mcp-config",
+      "--tools", "Read,Glob,Grep", "--",
+      "Answer the request in read-only mode. Do not modify files or repository state.\n"
+        + "When the request is a plan or design, state the assumptions it depends on, the trade-offs, and what would make it fail.\n"
+        + "\nDiscuss this plan"
+    ]);
+    assert.doesNotMatch(args.at(-1), /ordered by severity/);
+    assert.deepEqual(args, buildClaudeArgs({ ...request, mode: "discuss" }));
+  });
+}
+
 test("buildClaudeArgs forces reviews to plan mode", () => {
   const args = buildClaudeArgs({
     prompt: "Review this diff",
     mode: "review",
+    permissionMode: "acceptEdits",
     allowedTools: ["Write", "Bash(git *)"],
-    mcpConfigFile: "/tmp/untrusted-mcp.json"
+    disallowedTools: ["Read"],
+    mcpConfigFile: "/tmp/untrusted-mcp.json",
+    strictMcpConfig: false
   });
   assert.deepEqual(args.slice(0, 5), ["--print", "--output-format", "json", "--prompt-suggestions", "false"]);
   assert.equal(args[args.indexOf("--permission-mode") + 1], "plan");
@@ -78,13 +107,38 @@ test("buildClaudeArgs forces reviews to plan mode", () => {
   assert.equal(args.includes("--strict-mcp-config"), true);
   assert.equal(args[args.indexOf("--tools") + 1], "Read,Glob,Grep");
   assert.equal(args.includes("--allowedTools"), false);
+  assert.equal(args.includes("--disallowedTools"), false);
   assert.equal(args.includes("--mcp-config"), false);
   assert.match(args.at(-1), /Do not modify files/);
+  assert.match(args.at(-1), /ordered by severity/);
+  assert.doesNotMatch(args.at(-1), /Answer the request/);
+});
+
+test("buildClaudeArgs rejects task mode without an explicit permission mode", () => {
+  assert.throws(
+    () => buildClaudeArgs({ prompt: "Fix it", mode: "task" }),
+    { message: "task mode requires an explicit permissionMode" }
+  );
+});
+
+test("buildClaudeArgs accepts task mode with explicit plan permissions", () => {
+  const args = buildClaudeArgs({ prompt: "  Plan the task  ", mode: "task", permissionMode: "plan" });
+  assert.deepEqual(args, [
+    "--print", "--output-format", "json", "--prompt-suggestions", "false",
+    "--permission-mode", "plan", "--", "Plan the task"
+  ]);
+});
+
+test("buildClaudeArgs rejects unsupported run modes", () => {
+  assert.throws(
+    () => buildClaudeArgs({ prompt: "Inspect it", mode: "unknown" }),
+    { message: "Unsupported run mode: unknown" }
+  );
 });
 
 test("buildClaudeArgs rejects implicit permission bypass", () => {
   assert.throws(
-    () => buildClaudeArgs({ prompt: "Fix it", permissionMode: "bypassPermissions" }),
+    () => buildClaudeArgs({ prompt: "Fix it", mode: "task", permissionMode: "bypassPermissions" }),
     /allowDangerousPermissions=true/
   );
 });
@@ -92,6 +146,8 @@ test("buildClaudeArgs rejects implicit permission bypass", () => {
 test("buildClaudeArgs terminates variadic add-dir values before the prompt", () => {
   const args = buildClaudeArgs({
     prompt: "Inspect the workspace",
+    mode: "task",
+    permissionMode: "manual",
     addDirs: ["../shared", "../fixtures"]
   });
 
@@ -108,6 +164,8 @@ test("buildClaudeArgs terminates variadic add-dir values before the prompt", () 
 test("buildClaudeArgs passes explicit settings, strict MCP config, and command allowlist", () => {
   const args = buildClaudeArgs({
     prompt: "Run checks",
+    mode: "task",
+    permissionMode: "manual",
     settingsFile: "/tmp/settings.json.custom",
     mcpConfigFile: "/tmp/mcp.json",
     strictMcpConfig: true,
@@ -125,7 +183,7 @@ test("buildClaudeArgs passes explicit settings, strict MCP config, and command a
 
 test("buildClaudeArgs rejects unsafe command allowlist entries", () => {
   assert.throws(
-    () => buildClaudeArgs({ prompt: "Run checks", allowedCommands: ["node;rm"] }),
+    () => buildClaudeArgs({ prompt: "Run checks", mode: "task", permissionMode: "manual", allowedCommands: ["node;rm"] }),
     /Unsupported workspace command/
   );
 });
@@ -172,6 +230,11 @@ test("runClaude passes the resolved default Claude settings file to Claude", asy
   try {
     const outcome = await runClaude({ cwd: root, prompt: "Check default settings" });
     const payload = JSON.parse(outcome.result);
+    assert.equal(payload.args[payload.args.indexOf("--permission-mode") + 1], "plan");
+    assert.equal(payload.args.includes("--safe-mode"), true);
+    assert.equal(payload.args.includes("--strict-mcp-config"), true);
+    assert.equal(payload.args[payload.args.indexOf("--tools") + 1], "Read,Glob,Grep");
+    assert.match(payload.args.at(-1), /^Answer the request in read-only mode\./);
     assert.equal(
       payload.args[payload.args.indexOf("--settings") + 1],
       resolveSettingsFile()

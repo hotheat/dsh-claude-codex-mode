@@ -41,13 +41,13 @@ const TOOLS = [
   },
   {
     name: "claude_code_run",
-    description: "Run a Claude Code CLI task or read-only review in a workspace, optionally as a persistent background job.",
+    description: "Run a Claude Code CLI discussion, review, or task in a workspace, optionally as a persistent background job.",
     inputSchema: {
       type: "object",
       properties: {
         cwd: { type: "string", description: "Absolute trusted workspace directory." },
-        prompt: { type: "string", description: "Complete task or review request sent to Claude Code." },
-        mode: { type: "string", enum: ["task", "review"], default: "task" },
+        prompt: { type: "string", description: "Complete discussion, review, or task request sent to Claude Code." },
+        mode: { type: "string", enum: ["discuss", "review", "task"], default: "discuss" },
         background: { type: "boolean", default: false, description: "Run as a persistent job. Required for work expected to approach the four-minute synchronous limit." },
         envFile: { type: "string", description: "Optional explicit .env path, resolved from cwd." },
         environmentPolicy: { type: "string", enum: ["inherit", "settings"], default: "inherit", description: "Use settings to isolate Claude provider/model variables from the caller environment." },

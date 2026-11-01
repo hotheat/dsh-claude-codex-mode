@@ -52,23 +52,31 @@ export function buildClaudeArgs(request) {
     throw new Error("bypassPermissions requires allowDangerousPermissions=true.");
   }
 
-  const mode = request.mode ?? "task";
-  if (!new Set(["task", "review"]).has(mode)) {
+  const mode = request.mode ?? "discuss";
+  if (!new Set(["discuss", "review", "task"]).has(mode)) {
     throw new Error(`Unsupported run mode: ${mode}`);
   }
-  const prompt = mode === "review"
-    ? [
-        "Review the requested scope in read-only mode. Do not modify files or repository state.",
-        "Report concrete findings with file paths and line numbers, ordered by severity.",
-        "",
-        request.prompt.trim()
-      ].join("\n")
+  if (mode === "task" && !request.permissionMode) {
+    throw new Error("task mode requires an explicit permissionMode");
+  }
+  const preamble = {
+    discuss: [
+      "Answer the request in read-only mode. Do not modify files or repository state.",
+      "When the request is a plan or design, state the assumptions it depends on, the trade-offs, and what would make it fail."
+    ],
+    review: [
+      "Review the requested scope in read-only mode. Do not modify files or repository state.",
+      "Report concrete findings with file paths and line numbers, ordered by severity."
+    ]
+  }[mode];
+  const prompt = preamble
+    ? [...preamble, "", request.prompt.trim()].join("\n")
     : request.prompt.trim();
 
   const args = ["--print", "--output-format", "json", "--prompt-suggestions", "false"];
   if (request.model) args.push("--model", request.model);
   if (request.effort) args.push("--effort", request.effort);
-  if (mode === "review") {
+  if (mode !== "task") {
     args.push(
       "--permission-mode", "plan",
       "--safe-mode",
@@ -84,10 +92,10 @@ export function buildClaudeArgs(request) {
   if (request.continueLatest) args.push("--continue");
   if (request.forkSession) args.push("--fork-session");
   if (request.settingsFile) args.push("--settings", request.settingsFile);
-  if (mode !== "review" && request.mcpConfigFile) args.push("--mcp-config", request.mcpConfigFile);
-  if (mode !== "review" && request.strictMcpConfig) args.push("--strict-mcp-config");
+  if (mode === "task" && request.mcpConfigFile) args.push("--mcp-config", request.mcpConfigFile);
+  if (mode === "task" && request.strictMcpConfig) args.push("--strict-mcp-config");
   if (request.maxBudgetUsd != null) args.push("--max-budget-usd", String(request.maxBudgetUsd));
-  if (mode !== "review") {
+  if (mode === "task") {
     addListArgument(args, "--allowedTools", buildAllowedTools(request));
     addListArgument(args, "--disallowedTools", request.disallowedTools);
   }
@@ -268,7 +276,7 @@ export async function runClaude(request, options = {}) {
     result,
     parsed,
     hasValidOutput,
-    request.mode ?? "task",
+    request.mode ?? "discuss",
     request.expectedModel
   );
   const completedAt = new Date().toISOString();
