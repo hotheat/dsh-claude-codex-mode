@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.6.0 - 2026-11-02
+
+### Changed
+
+- 新增 `discuss` 模式并设为 `claude_code_run` 的默认模式。
+- `discuss` 与 `review` 共用只读参数，但使用不同的 preamble：讨论说明计划或设计的假设、取舍及失败条件，复核按严重程度报告具体问题。
+- `task` 模式必须显式传入 `permissionMode`。
+
+### 调用方需要做的事
+
+- 依赖旧默认 `task` 的调用必须显式传入 `mode: "task"` 和 `permissionMode`。
+- 讨论请求改用 `mode: "discuss"`。
+- `review` 用法不变。
+
 ## 0.5.0 - 2026-10-29
 
 ### Added

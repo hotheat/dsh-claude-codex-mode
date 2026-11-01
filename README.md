@@ -18,13 +18,27 @@ You choose the mode in this plugin's form on the DSH **Plugins** page. Switching
 | Mode | Who discusses | Who edits | MCP servers mounted |
 |---|---|---|---|
 | `api` (default) | The DSH model itself. You configure an Anthropic provider (API key) on the Models page and pick Claude | Codex host tools | None |
-| `claude-code-cli` | The DSH model forwards discussion to the Claude Code CLI in read-only `review` mode, using your Claude subscription login (no API key) | Codex host tools, called by the DSH model | `claude-code` |
+| `claude-code-cli` | The DSH model forwards discussion to the Claude Code CLI in read-only `discuss`/`review` modes, using your Claude subscription login (no API key) | Codex host tools, called by the DSH model | `claude-code` |
 
 In `claude-code-cli` mode, Claude Code cannot see the DSH session. The routing prompt therefore tells the DSH model to:
 
 - send your words and any needed context in each `mcp__claude-code__claude_code_run` call;
 - continue a topic with `resumeSessionId`;
 - relay Claude Code's conclusions faithfully.
+
+### Claude Code run modes
+
+`claude_code_run` supports three modes:
+
+| Mode | Behavior |
+|---|---|
+| `discuss` (default) | Read-only discussion of requirements, plans, architecture, docs and code; plans and designs state their assumptions, trade-offs and failure conditions. |
+| `review` | Read-only code or change review, reporting findings with file paths and line numbers, ordered by severity. |
+| `task` | Requires an explicit `permissionMode`; permissions and tool access follow the caller's configuration. |
+
+`discuss` and `review` share `--permission-mode plan --safe-mode --strict-mcp-config --tools Read,Glob,Grep`, with different prompt preambles for discussion and findings.
+Both modes ignore caller overrides for `permissionMode`, `allowedTools`, `allowedCommands`, `disallowedTools`, `mcpConfigFile` and `strictMcpConfig`.
+Repository code edits still go to Codex through the routing rules below.
 
 ### Codex execution
 

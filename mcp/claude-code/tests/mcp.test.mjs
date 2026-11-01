@@ -166,6 +166,9 @@ test("MCP server lists tools and completes a background Claude job", async (t) =
   const runTool = listed.result.tools.find((tool) => tool.name === "claude_code_run");
   assert.equal(setupTool.inputSchema.properties.settingsFile.type, "string");
   assert.equal(runTool.inputSchema.properties.settingsFile.type, "string");
+  assert.deepEqual(runTool.inputSchema.properties.mode.enum, ["discuss", "review", "task"]);
+  assert.equal(runTool.inputSchema.properties.mode.default, "discuss");
+  assert.match(runTool.description, /^Run a Claude Code CLI discussion, review, or task/);
   assert.deepEqual(setupTool.inputSchema.properties.environmentPolicy.enum, ["inherit", "settings"]);
   assert.equal(runTool.inputSchema.properties.expectedModel.type, "string");
 
@@ -219,7 +222,7 @@ test("MCP approve resumes a job waiting on Claude permissions", async (t) => {
 
   const started = toolPayload(await server.request(1, "tools/call", {
     name: "claude_code_run",
-    arguments: { cwd: root, prompt: "Inspect media", background: true }
+    arguments: { cwd: root, prompt: "Inspect media", mode: "task", permissionMode: "manual", background: true }
   }));
 
   let waiting;

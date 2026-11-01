@@ -18,13 +18,27 @@
 | 模式 | 讨论由谁完成 | 代码修改 | 挂载的 MCP |
 |---|---|---|---|
 | `api`（默认） | DSH 主模型本身。在模型页配置 Anthropic provider（API key）并选择 Claude | Codex 宿主工具 | 无 |
-| `claude-code-cli` | DSH 主模型把讨论转发给 Claude Code CLI，用只读 `review` 模式和订阅登录，不需要 API key | Codex 宿主工具（由 DSH 主模型调用） | `claude-code` |
+| `claude-code-cli` | DSH 主模型把讨论转发给 Claude Code CLI，用只读 `discuss`/`review` 模式和订阅登录，不需要 API key | Codex 宿主工具（由 DSH 主模型调用） | `claude-code` |
 
 `claude-code-cli` 模式下，Claude Code 看不到 DSH 会话。因此路由提示词要求 DSH 主模型：
 
 - 每次调用 `mcp__claude-code__claude_code_run` 时带上你的原话和必要上下文；
 - 同一话题用 `resumeSessionId` 续接；
 - 如实转述 Claude Code 的结论。
+
+### Claude Code 调用模式
+
+`claude_code_run` 支持三档模式：
+
+| 模式 | 行为 |
+|---|---|
+| `discuss`（默认） | 只读讨论需求、计划、架构、文档和代码；计划与设计需说明依赖的假设、取舍及失败条件。 |
+| `review` | 只读复核代码或变更，按严重程度报告具体问题，附文件路径和行号。 |
+| `task` | 必须显式传入 `permissionMode`，按调用方配置设置权限和工具访问范围。 |
+
+`discuss` 与 `review` 共用 `--permission-mode plan --safe-mode --strict-mcp-config --tools Read,Glob,Grep`，分别使用讨论和问题复核的 preamble。
+两者均忽略调用方传入的 `permissionMode`、`allowedTools`、`allowedCommands`、`disallowedTools`、`mcpConfigFile` 和 `strictMcpConfig` 覆盖值。
+仓库代码改动仍按下方路由规则交给 Codex。
 
 ### Codex 执行链路
 
