@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.7.1 - 2026-11-06
+
+### Fixed
+
+- 兼容 Cordis 0.2.2（DSH 0.2.2）的 Fiber 配置语义：`fiber.config` 现在保留原始配置，校验后的对象移到 `fiber.effectiveConfig`。读取 llm-pi-ai provider 时优先使用 `effectiveConfig`，并兼容旧版 `fiber.config`，修复插件激活时报 `row.fiber.config.providers.get is not a function` 的问题。
+
+### 调用方需要做的事
+
+- 在 DSH 0.2.2 或更新版本中启用本插件前，升级到 0.7.1。
+
 ## 0.7.0 - 2026-11-02
 
 ### Added
